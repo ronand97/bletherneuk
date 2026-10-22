@@ -23,6 +23,8 @@ pub struct Line {
     pub prompt: Option<String>,
     /// You pressed Esc: Claude Code logs "[Request interrupted by user…]" and sends no Stop.
     pub interrupted: bool,
+    /// A PR Claude Code linked to the chat (`pr-link` lines): `owner/repo` (lower case) and number.
+    pub pr_link: Option<(String, u64)>,
     /// `(tool, file_path)` for each Write/Edit/MultiEdit/NotebookEdit call.
     pub writes: Vec<(String, String)>,
     pub commands: Vec<String>,
@@ -55,6 +57,13 @@ pub fn parse_line(bytes: &[u8]) -> Parsed {
     };
     match kind {
         "custom-title" => line.custom_title = str_field(&v, "customTitle"),
+        "pr-link" => {
+            let repo = str_field(&v, "prRepository").filter(|r| crate::links::is_github_repo(r));
+            let number = v.get("prNumber").and_then(Value::as_u64);
+            if let (Some(repo), Some(n)) = (repo, number) {
+                line.pr_link = Some((repo.to_ascii_lowercase(), n));
+            }
+        }
         "ai-title" => line.ai_title = str_field(&v, "aiTitle"),
         "user" => read_user(&v, &mut line),
         "assistant" => read_assistant(&v, &mut line),
@@ -273,6 +282,16 @@ mod tests {
         ] {
             assert_eq!(line(json).prompt, None, "{json}");
         }
+    }
+
+    #[test]
+    fn reads_pr_links() {
+        let l = line(
+            r#"{"type":"pr-link","sessionId":"s","prNumber":42,"prRepository":"Acme/Shop","prUrl":"https://github.com/Acme/Shop/pull/42"}"#,
+        );
+        assert_eq!(l.pr_link, Some(("acme/shop".into(), 42)));
+        let bad = line(r#"{"type":"pr-link","prNumber":"42","prRepository":"acme/shop; x"}"#);
+        assert_eq!(bad.pr_link, None);
     }
 
     #[test]

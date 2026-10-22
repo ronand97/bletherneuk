@@ -22,6 +22,7 @@ CREATE TABLE chats (
     title_source    TEXT,                  -- custom | ai | prompt
     first_prompt    TEXT,
     recorded_branch TEXT,
+    pr_link         TEXT,                  -- owner/repo#n from Claude Code's pr-link lines
     start_cwd       TEXT,
     last_cwd        TEXT,
     repo_root       TEXT,                  -- repo of the folder the chat started in

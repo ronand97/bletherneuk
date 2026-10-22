@@ -74,6 +74,8 @@ struct Batch {
     last_ts: Option<i64>,
     /// The latest "[Request interrupted by user]" line.
     interrupted_at: Option<i64>,
+    /// The latest PR Claude Code linked to the chat.
+    pr_link: Option<(String, u64)>,
     /// (absolute path, time)
     writes: Vec<(PathBuf, Option<i64>)>,
     /// (absolute path, found_by)
@@ -107,6 +109,9 @@ impl Batch {
         }
         if let Some(t) = line.ai_title {
             self.ai_title = Some(t);
+        }
+        if let Some(pr) = line.pr_link {
+            self.pr_link = Some(pr);
         }
         if line.interrupted {
             self.interrupted_at = self.interrupted_at.max(line.timestamp.or(Some(0)));
@@ -310,6 +315,12 @@ impl<'a> Ingestor<'a> {
                     params![chat_id, c],
                 )?;
             }
+        }
+        if let Some((repo, n)) = &b.pr_link {
+            tx.execute(
+                "UPDATE chats SET pr_link = ?2 WHERE id = ?1",
+                params![chat_id, format!("{repo}#{n}")],
+            )?;
         }
         if let Some(br) = &b.branch {
             tx.execute(

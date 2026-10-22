@@ -108,7 +108,7 @@ pub fn refresh_location(
 pub fn facts(conn: &Connection, chat_id: &str) -> rusqlite::Result<Facts> {
     let mut f = conn.query_row(
         "SELECT c.title, c.first_prompt, c.recorded_branch, c.repo_root, r.github,
-                r.default_branch, c.start_worktree
+                r.default_branch, c.start_worktree, c.pr_link
          FROM chats c LEFT JOIN repos r ON r.root = c.repo_root
          WHERE c.id = ?1",
         [chat_id],
@@ -122,6 +122,10 @@ pub fn facts(conn: &Connection, chat_id: &str) -> rusqlite::Result<Facts> {
                 default_branch: r.get(5)?,
                 start_worktree: r.get(6)?,
                 wrote_in: Vec::new(),
+                pr_link: r.get::<_, Option<String>>(7)?.and_then(|p| {
+                    let (repo, n) = p.rsplit_once('#')?;
+                    Some((repo.to_string(), n.parse().ok()?))
+                }),
             })
         },
     )?;

@@ -110,12 +110,13 @@ fn reads_a_whole_transcript() {
         r("shop/.claude/worktrees/retry")
     );
     assert_eq!(chat_field::<i64>(c, "first_activity"), 1_767_344_400_000);
-    assert_eq!(chat_field::<i64>(c, "last_activity"), 1_767_346_260_000);
+    assert_eq!(chat_field::<i64>(c, "last_activity"), 1_767_346_320_000);
     assert_eq!(
         chat_field::<String>(c, "transcript_path"),
         path.to_string_lossy()
     );
     assert!(!chat_field::<bool>(c, "hidden"));
+    assert_eq!(chat_field::<String>(c, "pr_link"), "acme/shop#42");
 
     assert_eq!(
         writes(c),

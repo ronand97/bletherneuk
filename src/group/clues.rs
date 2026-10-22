@@ -94,6 +94,8 @@ pub struct Facts {
     /// The worktree containing the folder the chat started in.
     pub start_worktree: Option<String>,
     pub wrote_in: Vec<WroteIn>,
+    /// The PR Claude Code linked to the chat (`owner/repo`, number).
+    pub pr_link: Option<(String, u64)>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -200,6 +202,13 @@ pub fn evaluate(f: &Facts, ticket_prefixes: &[String]) -> Placement {
             }
             None => {}
         }
+    }
+
+    if let Some((repo, number)) = &f.pr_link {
+        return Placement {
+            key: Some(Key::pr(repo, *number)),
+            reason: format!("Claude linked PR #{number}"),
+        };
     }
 
     for (what, text) in texts {
@@ -395,6 +404,28 @@ mod tests {
         let p = evaluate(&f, &prefixes());
         assert_eq!(p.key, Some(Key::pr("other/lib", 5)));
         assert_eq!(p.reason, "first prompt links PR #5");
+    }
+
+    #[test]
+    fn a_linked_pr_comes_after_a_pr_in_the_title_and_before_tickets() {
+        let f = Facts {
+            pr_link: Some(("acme/shop".into(), 7)),
+            first_prompt: Some("Work on ABC-12".into()),
+            recorded_branch: Some("feat/x".into()),
+            ..base()
+        };
+        let p = evaluate(&f, &prefixes());
+        assert_eq!(p.key, Some(Key::pr("acme/shop", 7)));
+        assert_eq!(p.reason, "Claude linked PR #7");
+
+        let f = Facts {
+            title: Some("Review PR #42".into()),
+            ..f
+        };
+        assert_eq!(
+            evaluate(&f, &prefixes()).key,
+            Some(Key::pr("acme/shop", 42))
+        );
     }
 
     #[test]
