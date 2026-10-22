@@ -384,6 +384,29 @@ fn merged_and_idle_blocks_are_archived_until_new_activity() {
 }
 
 #[test]
+fn a_block_is_as_recent_as_its_latest_chat() {
+    let mut env = Env::new();
+    let r = setup(&mut env);
+    let old = NOW - 30 * 86_400_000;
+    add_chat(
+        env.store.conn(),
+        ChatSpec {
+            last_activity: old,
+            ..chat("a", &r.wt, "feat/retry")
+        },
+    );
+    let b = place(&env, "a").unwrap();
+    let last: i64 = env
+        .store
+        .conn()
+        .query_row("SELECT last_active FROM blocks WHERE id = ?1", [b], |r| {
+            r.get(0)
+        })
+        .unwrap();
+    assert_eq!(last, old, "not the time the block was first seen");
+}
+
+#[test]
 fn ticket_keys_become_jira_links_and_manual_titles_win() {
     let mut env = Env::new();
     let r = setup(&mut env);

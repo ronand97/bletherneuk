@@ -171,6 +171,8 @@ pub struct App {
     pub panel_refresh: Mutex<Option<Instant>>,
     pub ingest_tx: mpsc::UnboundedSender<PathBuf>,
     pub snap_tx: mpsc::UnboundedSender<snapshots::Job>,
+    /// Asks the worktree job to refresh now (a branch switch, or new repos found).
+    pub worktrees_now: Arc<tokio::sync::Notify>,
 }
 
 pub type Shared = Arc<App>;
@@ -228,6 +230,7 @@ impl App {
             panel_refresh: Mutex::new(None),
             ingest_tx,
             snap_tx,
+            worktrees_now: Arc::new(tokio::sync::Notify::new()),
         };
         (
             Arc::new(app),

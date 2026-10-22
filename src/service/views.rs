@@ -29,7 +29,8 @@ fn fmt_time(ms: i64) -> String {
 
 const CHAT_SELECT: &str = "
     SELECT c.id, c.title, c.status, c.background, c.block_id, b.title, c.last_activity,
-           c.status_since, c.worktree_path, w.repo_root, w.branch, w.removed, c.group_reason,
+           c.status_since, c.worktree_path, COALESCE(w.repo_root, c.repo_root), w.branch, w.removed,
+           c.group_reason,
            c.hidden, c.iterm_session, c.transcript_gone, c.last_cwd,
            COALESCE((SELECT cw.branch FROM chat_worktrees cw
                      WHERE cw.chat_id = c.id AND cw.worktree != COALESCE(c.start_worktree, '')

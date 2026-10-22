@@ -10,7 +10,10 @@ fn run_hook(home: &std::path::Path, stdin: &[u8]) -> (std::process::Output, Dura
     let mut child = Command::new(env!("CARGO_BIN_EXE_blether"))
         .arg("hook")
         .env("BLETHERNEUK_HOME", home)
-        .env("ITERM_SESSION_ID", "w0t0p0:6F3A1E2B-1C2D-4E5F-8A9B-0C1D2E3F4A5B")
+        .env(
+            "ITERM_SESSION_ID",
+            "w0t0p0:6F3A1E2B-1C2D-4E5F-8A9B-0C1D2E3F4A5B",
+        )
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -36,8 +39,16 @@ fn silent_and_successful_whatever_happens() {
     ] {
         let (out, took) = run_hook(dir.path(), input);
         assert_eq!(out.status.code(), Some(0));
-        assert!(out.stdout.is_empty(), "stdout: {:?}", String::from_utf8_lossy(&out.stdout));
-        assert!(out.stderr.is_empty(), "stderr: {:?}", String::from_utf8_lossy(&out.stderr));
+        assert!(
+            out.stdout.is_empty(),
+            "stdout: {:?}",
+            String::from_utf8_lossy(&out.stdout)
+        );
+        assert!(
+            out.stderr.is_empty(),
+            "stderr: {:?}",
+            String::from_utf8_lossy(&out.stderr)
+        );
         assert!(took < Duration::from_secs(2), "took {took:?}");
     }
 }

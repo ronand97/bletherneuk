@@ -171,6 +171,7 @@ Both lists are newest first.
 
 ```json
 {
+  "worktree": 7,
   "range": {"kind": "review|branch|turn", "from_label": "...", "to_label": "..."},
   "files": [FileDiff],
   "totals": {"files": 3, "additions": 10, "deletions": 2},
@@ -180,7 +181,7 @@ Both lists are newest first.
 }
 ```
 
-`worktree` defaults to the worktree with the most recent turn. `range` defaults to `review`. With no review yet, `review` falls back to `branch`.
+`worktree` defaults to the worktree with the most recent turn; the response says which one it used. `range` defaults to `review`. With no review yet, `review` falls back to `branch`.
 
 **`GET /api/theme`** returns `{"vars": {"--background": "#24273a", ...}}`. Pages set each variable on `document.documentElement` with `style.setProperty`.
 

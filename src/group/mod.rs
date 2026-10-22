@@ -570,8 +570,8 @@ pub fn refresh_block(
 
     conn.execute(
         "UPDATE blocks SET title = ?2, title_source = ?3, repo = COALESCE(?4, repo),
-                last_active = MAX(created_at, COALESCE(?5, 0)),
-                archived = ?6 AND MAX(created_at, COALESCE(?5, 0)) < ?7
+                last_active = COALESCE(?5, created_at),
+                archived = ?6 AND COALESCE(?5, created_at) < ?7
          WHERE id = ?1",
         params![
             block,

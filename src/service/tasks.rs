@@ -26,7 +26,7 @@ pub struct Receivers {
 
 pub fn spawn_all(app: Shared, rx: Receivers) {
     super::snapshots::spawn_worker(app.clone(), rx.snapshots);
-    let worktrees_now = Arc::new(Notify::new());
+    let worktrees_now = app.worktrees_now.clone();
     tokio::spawn(ingest_worker(app.clone(), rx.ingest));
     tokio::spawn(watch_loop(app.clone(), worktrees_now.clone()));
     tokio::spawn(worktree_loop(app.clone(), worktrees_now));
@@ -112,6 +112,10 @@ async fn ingest_worker(app: Shared, mut rx: mpsc::UnboundedReceiver<PathBuf>) {
         })
         .await
         .unwrap_or_default();
+        if !touched.is_empty() {
+            // New chats can bring new repos and worktrees.
+            app.worktrees_now.notify_one();
+        }
         app.changed(touched);
     }
 }
