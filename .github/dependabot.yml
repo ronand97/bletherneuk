@@ -8,6 +8,10 @@ updates:
     directory: /web
     schedule:
       interval: weekly
+    ignore:
+      # svelte-check 4 doesn't support TypeScript 7 yet.
+      - dependency-name: typescript
+        update-types: ["version-update:semver-major"]
   - package-ecosystem: pip
     directory: /bridge
     schedule:
