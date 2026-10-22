@@ -1,7 +1,7 @@
 # bletherneuk — design
 
 - **Date:** 2026-10-22
-- **Status:** Draft, awaiting review
+- **Status:** Approved on 2026-10-22, built the same day. Where the build settled a detail the design left open, this document says so. [`docs/protocol.md`](../protocol.md) has the exact protocols.
 - **Command:** `blether`
 
 "Blether" is Scots for a chat, and a "neuk" is a nook or corner. bletherneuk is the corner where your Claude Code chats are kept in order.
@@ -141,7 +141,9 @@ Claude Code writes one JSONL transcript per chat at `~/.claude/projects/<encoded
   - `type`, `sessionId`, `cwd`, `gitBranch`, `timestamp`.
   - The title, in this order: `custom-title` (`customTitle`), then the latest `ai-title` (`aiTitle`), then the first user prompt cut to 80 characters.
   - User prompts: `type: "user"` lines whose content is text, not a tool result.
-  - Assistant `tool_use` blocks: `file_path` for `Write`, `Edit`, `MultiEdit` and `NotebookEdit`, and `command` for `Bash`.
+  - Assistant `tool_use` blocks: `file_path` for `Write`, `Edit`, `MultiEdit` and `NotebookEdit` (`notebook_path` for the last), and `command` for `Bash`.
+  - `pr-link` lines (`prRepository`, `prNumber`), which Claude Code writes for PRs a chat creates or references.
+  - "[Request interrupted by user…]" lines, which Claude Code writes when you press Esc. These aren't prompts.
   - `tool_result` text, scanning only the first 256 KB of each result, for file paths.
 - **Subagent transcripts** are read for file writes, which are credited to the parent chat. Subagents are not listed as chats.
 - **Robustness.** Unknown `type` values are ignored. Lines that fail to parse are skipped and counted. Lines over 8 MB are skipped without parsing. `blether doctor` shows the counts. The transcript format is not a public API and changes between Claude Code versions, so the parser only depends on the fields above. Every field is optional.
@@ -153,23 +155,24 @@ Each chat is placed by the first clue that matches.
 
 1. **Manual move.** You moved it with "Move to…". This always wins and is never undone by later clues.
 2. **PR reference** in the chat's title or first prompt: `PR #123`, `PR 123` or `pr123` (case-insensitive), or a URL like `github.com/<owner>/<repo>/pull/123`. Without a URL, the PR belongs to the GitHub repo of the chat's folder (from the `origin` remote).
-3. **Ticket key** in the title, the first prompt or the branch name. Only prefixes listed in `tickets.projects` in the config count, for example `["ABC"]`. A generic pattern would also match `UTF-8`, `SHA-256` and `ISO-8601`. With no prefixes configured, this clue is off. In branch names, `_` is accepted in place of `-` (`feat/abc_123_retry` → `ABC-123`).
-4. **Worktree drift.** The chat wrote files inside a different git worktree from the folder it started in. It takes that worktree's branch. If it wrote into several, the one with the most writes wins. Claude Code records the branch a chat starts on and never updates it, so without this clue such chats land in the wrong place.
-5. **Recorded branch**, unless it is the repo's default branch or `HEAD`. The default branch is read from `refs/remotes/origin/HEAD`, falling back to `main` and then `master`.
-6. Otherwise the chat goes to **Unsorted**.
+3. **Linked PR.** The latest PR Claude Code linked to the chat, from its `pr-link` lines.
+4. **Ticket key** in the title, the first prompt or the branch name. Only prefixes listed in `tickets.projects` in the config count, for example `["ABC"]`. A generic pattern would also match `UTF-8`, `SHA-256` and `ISO-8601`. With no prefixes configured, this clue is off. In branch names, `_` is accepted in place of `-` (`feat/abc_123_retry` → `ABC-123`).
+5. **Worktree drift.** The chat wrote files inside a different git worktree from the folder it started in. It takes that worktree's branch. If it wrote into several, the one with the most writes wins. Claude Code records the branch a chat starts on and never updates it, so without this clue such chats land in the wrong place.
+6. **Recorded branch**, unless it is the repo's default branch or `HEAD`. The default branch is read from `refs/remotes/origin/HEAD`, falling back to `main` and then `master`.
+7. Otherwise the chat goes to **Unsorted**.
 
 Every chat stores a `group_reason`, such as "title mentions PR #42" or "wrote files in worktree feature-x". The panel shows it next to the chat, so wrong guesses are easy to spot and move.
 
 **Creating and joining blocks**
 
 - A block is created the first time a new key turns up: a branch, PR or ticket.
-- Keys join one block when they are linked. A PR's head branch (from `gh`) joins its `pr` and `branch` keys. A ticket key in a PR's title or head branch joins the `ticket` key too. If joining would bring two existing blocks together, they merge. Links, files, overrides and review markers are combined.
+- Keys join one block when they are linked. A PR's head branch (from `gh`) joins its `pr` and `branch` keys, unless the PR comes from a fork or its head is the repo's default branch. A fork's `main` says nothing about this repo's branches. A ticket key in a PR's title or head branch joins the `ticket` key too. If joining would bring two existing blocks together, they merge. Links, files, overrides and review markers are combined.
 - **Block title**, in this order: your rename, the PR title, the ticket key, the branch name.
 - **Archive.** A block is archived when its PR is merged or closed and it has had no chat activity for 14 days (`archive.idle_days`). Any new activity in one of its chats brings it back.
 
 Clues are re-evaluated whenever new information arrives, such as a new transcript line or a PR's head branch from `gh`. Manual moves are never re-evaluated.
 
-**Chats started from a block.** When you start a chat from a block's panel, the bridge tags its iTerm2 session with the block. The first hook event from that session assigns the chat to that block, and the assignment is stored like a manual move. This covers new chats in a new worktree, whose branch doesn't exist anywhere else yet.
+**Chats started from a block.** When you start a chat from a block's panel, the bridge tags its iTerm2 session with the block. The first hook event from that session assigns the chat to that block, and the assignment is stored like a manual move. Only new chats are tagged: tabs the bridge opens to resume a chat, and tabs you open by hand in a block's window, are not. This covers new chats in a new worktree, whose branch doesn't exist anywhere else yet.
 
 ### Branches and worktrees
 
@@ -189,7 +192,7 @@ Many chats run in git worktrees, often Claude Code's own `.claude/worktrees/<nam
   - Grouping uses the branch the chat actually worked on, from the transcript and the worktree-drift clue. If a worktree later switches branch, old chats stay with the work they belong to.
   - The display shows the worktree's *current* branch, and adds "now on `<branch>`" when it differs from the chat's.
 - **A block's worktrees** are those whose current branch is one of the block's branch keys, plus any worktree its chats ran in.
-- **Removed worktrees.** Chats whose worktree has been removed are marked "worktree removed". The build will check whether `claude --resume` finds such a chat when run from the main checkout. If it does, the resume button runs it there. If not, the button is disabled with an explanation.
+- **Removed worktrees.** Chats whose worktree has been removed are marked "worktree removed". Their resume button runs `claude --resume <id>` from the main checkout. Since Claude Code 2.1.223, resuming by ID finds a session from any folder, and the session carries on in the folder you resume from.
 
 ## 10. Docs and outputs
 
@@ -201,7 +204,7 @@ Many chats run in git worktrees, often Claude Code's own `.claude/worktrees/<nam
 - **Code files** are not listed. The PR shows them.
 - **Copies of temporary files.** When a doc or output is found inside a temporary directory, the service copies it into `~/Library/Application Support/bletherneuk/copies/<block-id>/`. The limits are 200 MB per file (`outputs.copy_max_mb`) and 5 GB in total (`outputs.copies_max_total_gb`). When the total limit is reached, copies from archived blocks are removed first, then the oldest. When the original is gone, the panel opens the copy and marks it as a copy. Section 20.5 sets which files may be copied.
 - **Opening.** Docs and outputs open with the default app for their extension. Section 20.5 covers how this is done safely.
-- **Manual changes.** In the panel you can add a file by hand or hide one. Files added by hand with an extension outside the lists above are only shown in Finder, not opened.
+- **Manual changes.** In the panel you can add a file by hand, through macOS's file picker, or hide one. `blether file <path>` adds one from a terminal. Files added by hand with an extension outside the lists above are only shown in Finder, not opened.
 
 ## 11. Links and PR status
 
@@ -216,25 +219,31 @@ URLs are recognised by pattern:
 
 - **Adding links.** Paste a URL into the panel's "+ link" box, or run `blether link <url> [--title "…"]`. The command line attaches the link to the block of the iTerm2 tab it runs in (`ITERM_SESSION_ID` → chat → block), or to `--block <id>`. Claude can run it too.
 - **Which URLs are accepted.** Only `https://` and `http://` URLs are accepted. This is checked when a link is saved, when it is shown and when it is opened (section 20.5). The panel shows each link's host next to its title. Links added by `blether link` from inside a Claude chat are marked "added by Claude".
-- **PR status.** For each GitHub repo that chats ran in, the service runs `gh pr list -R <owner>/<repo> --state all --limit 200 --json number,title,headRefName,isDraft,state,reviewDecision,statusCheckRollup,url` every 5 minutes. It runs from a neutral folder, never from inside a repo (section 20.4). It also refreshes one repo when one of its blocks gains focus, at most once a minute. Checks are summarised as passing, failing or pending.
+- **PR status.** For each GitHub repo that chats ran in, the service runs `gh pr list -R <owner>/<repo> --state all --limit 200 --json number,title,headRefName,isDraft,state,reviewDecision,statusCheckRollup,url` every 5 minutes. It runs from a neutral folder, never from inside a repo (section 20.4). It also refreshes one repo when one of its blocks gains focus, at most once a minute. Checks are summarised as passing, failing or pending. It also asks for `isCrossRepository`, to tell PRs from forks apart. Each repo is polled when it is due, checked every minute, so a repo found by a new chat doesn't wait.
 - **Ticket links from keys.** When `tickets.url_template` is set (for example `https://example.atlassian.net/browse/{key}`), each ticket key a block picks up becomes a Jira link automatically.
 
 ## 12. Live status
 
-`blether install` registers `blether hook` for these Claude Code hook events: `SessionStart`, `UserPromptSubmit`, `PreToolUse`, `PostToolUse`, `Notification`, `Stop` and `SessionEnd`.
+`blether install` registers `blether hook` for these Claude Code hook events: `SessionStart`, `UserPromptSubmit`, `PreToolUse`, `PostToolUse`, `PermissionRequest`, `Notification`, `SubagentStop`, `Stop`, `StopFailure` and `SessionEnd`.
 
 | Event | Chat status |
 |---|---|
 | `SessionStart` | idle |
 | `UserPromptSubmit`, `PreToolUse`, `PostToolUse` | working |
-| `Notification` (permission request or question) | needs you |
-| `Stop` | done, which becomes idle once the bridge reports you've focused the tab |
+| `PermissionRequest`, `PreToolUse` for `AskUserQuestion`, `Notification` of type `permission_prompt`, `elicitation_dialog`, `elicitation_url_dialog` or `agent_needs_input` | needs you |
+| `Stop` with no background tasks, `StopFailure` | done, which becomes idle once the bridge reports you've focused the tab |
+| `Stop` with background tasks | still working (background) |
+| `SubagentStop` with no background tasks left, for a chat working in the background | done |
+| `Notification` of type `idle_prompt`, for a chat working with no background tasks | done |
+| An "interrupted by user" transcript line, with no hook event since | done |
 | `SessionEnd` | closed |
+
+Claude Code sends no `Stop` when you interrupt a turn with Esc. The interrupt line in the transcript, or the `idle_prompt` notification a minute later, ends such a turn.
 
 - **Linking chats to tabs.** Every event carries the Claude session ID. The hook adds `ITERM_SESSION_ID` from its environment, since Claude runs inside that iTerm2 session. Its UUID part matches the iTerm2 API's session ID. This links a chat to its tab from the first event, including for chats started by hand.
 - **What the hook does.** It reads the event JSON from stdin (up to 1 MB). It adds `ITERM_SESSION_ID` and the time. It sends one line to the socket, with a 50 ms limit on connecting and writing. It always exits 0. **It never writes to stdout.** For some events, Claude Code adds a hook's stdout to the chat's context.
-- **Stale status.** If a chat has been "working" for 10 minutes with no events and its iTerm2 session no longer exists, it is marked closed.
-- **Background work.** A chat can keep working after a turn ends, through background shell tasks or subagents it launched. iTerm2's integration shows that recent Claude Code versions report this. During the build, the status machine will treat that background work as "working", using whichever events Claude Code sends for it.
+- **Stale status.** If a chat has been "working" for 10 minutes with no events and its iTerm2 session no longer exists, it is marked closed. Only the bridge can say a session is gone, so with the bridge down, or for a chat in another terminal, a quiet chat is left alone. The 12-hour keep-awake cap still applies.
+- **Background work.** A chat can keep working after a turn ends, through background shell tasks or subagents it launched. `Stop` and `SubagentStop` carry a `background_tasks` list, so a chat stays "working" while that list isn't empty.
 - **Living alongside other hooks.** iTerm2's own `cc-status` hook and any other hooks stay as they are.
 
 ### Keep awake until done
@@ -286,6 +295,7 @@ A **snapshot** is a git tree object recording the content of a worktree's code a
   - **Large tracked files.** A tracked file over 5 MB that has changed (`snapshots.tracked_max_mb`), such as a committed data file, keeps its previous content in the snapshot. The diff lists it as "changed, too large to snapshot".
   - **Secret-looking files.** Files whose names look like secrets (`snapshots.skip_patterns`, section 20.4).
 - **Limits per snapshot.** Each snapshot has a budget of new data, file count and time (section 20.9).
+- **Special files.** A tracked path that has become a FIFO, socket or device keeps its previous content, since reading it could block forever.
 - **Limit per repo.** Each repo's shadow store is limited to 2 GB (`snapshots.max_store_gb`). When it goes over:
   1. The service deletes the oldest snapshots taken before their block's latest review marker.
   2. If the store is still over, it deletes the oldest remaining snapshots, but always keeps the latest snapshot of each worktree and every review marker's snapshot.
@@ -311,7 +321,7 @@ A **snapshot** is a git tree object recording the content of a worktree's code a
   - files skipped because they look like secrets.
 
   Files created by scripts aren't listed here. Outputs appear in the panel's Outputs list. "Mark reviewed" only covers what the diff shows, and this list makes the gap visible.
-- **Mark reviewed** takes a `review` snapshot and moves the marker to it.
+- **Mark reviewed** moves the marker to exactly the snapshot the page showed as "now". Changes made after the diff loaded stay unreviewed.
 
 ## 14. iTerm2 bridge
 
@@ -327,15 +337,16 @@ The bridge is a basic iTerm2 script. It lives at `~/Library/Application Support/
 
 | Request | What happens |
 |---|---|
-| `open_chat(chat)` | Focuses the chat's tab if it's open. Otherwise it creates a tab in the block's window (creating the window if needed). The tab uses the default profile with `"Custom Directory": "Yes"` and `"Working Directory": <folder>`, so the folder never passes through a shell. The folder is checked first (section 20.6). The bridge then sends `claude --resume <uuid>` followed by a newline. This runs in your normal shell, so your PATH and virtualenvs work. |
-| `new_chat(block, where)` | Creates a tab in the block's window and tags its session with the block (section 9). `where` is one of:<br>• the block's worktree, running `claude` there;<br>• the main checkout, running `claude` there;<br>• a new worktree, running `claude --worktree <name>` from the main checkout. The name is suggested from the block title and must match `^[A-Za-z0-9._-]{1,64}$`. |
+| `open_chat(chat)` | Focuses the chat's tab if it's open. Otherwise it creates a tab in the block's window (creating the window if needed), or in the current window for a chat in Unsorted. The tab uses the default profile with `"Custom Directory": "Yes"` and `"Working Directory": <folder>`, so the folder never passes through a shell. The folder is checked first (section 20.6). The bridge then sends `claude --resume <uuid>` followed by a newline. This runs in your normal shell, so your PATH and virtualenvs work. |
+| `new_chat(block, where)` | Creates a tab in the block's window and tags its session with the block (section 9). `where` is one of:<br>• the block's worktree, running `claude` there;<br>• the main checkout, running `claude` there;<br>• a new worktree, running `claude --worktree <name>` from the main checkout. The name is suggested from the block title and must match `^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$`. The first character can't be `-` or `.`, so a name is never read as a flag such as `--dangerously-skip-permissions`. |
 | `open_block(block)` | Focuses the block's window. If it is closed, it opens a window with the chats that were open when you last closed it, or the most recent chat if none were. |
 | `open_page(url, near_session)` | Splits the session vertically with a browser profile (`"Custom Command": "Browser"`, `"Initial URL": <url>`), or reuses the split it opened before. The board instead opens in its own window. |
 | `set_titles` | Names windows after blocks and tabs after chats. iTerm2 treats titles as interpolated strings that can call functions, so backslashes are escaped first (section 20.6). |
 
 - **Remembering which window belongs to which block.** The bridge sets the iTerm2 variables `user.bletherneuk_block` on windows and `user.bletherneuk_chat` on sessions, so it can rebuild the mapping after a restart.
 - **Fallback.** If creating a browser session fails, or iTerm2 is older than 3.7.6, the bridge asks the service to open the page in the default browser with `open`.
-- **Toolbelt panel.** The bridge registers it with `async_register_web_view_tool` under the name "bletherneuk" and the identifier `dev.bletherneuk.panel`.
+- **Toolbelt panel.** The bridge registers it with `async_register_web_view_tool` under the name "bletherneuk" and the identifier `dev.bletherneuk.panel`. iTerm2 saves the registered URL in its preferences and loads it separately in every window's toolbelt. Section 20.2 covers what that means for the URL's code.
+- **Live check.** For `blether doctor --live`, the bridge opens a new browser split and closes it again. It closes only sessions it opened for that check.
 - **Open-board shortcut.** The bridge registers an `@iterm2.RPC` function, `bletherneuk_open_board()`. You bind it to a key under Settings → Keys → "Invoke Script Function".
 - **Reconnecting.** If the service isn't running, the bridge retries with backoff up to every 30 seconds.
 
@@ -411,6 +422,7 @@ Pages use CSS custom properties. When the file is saved, the service reloads it 
 | `blether uninstall` | Removes everything `install` added. Leaves the database unless `--purge` is given. |
 | `blether doctor [--live]` | Checks the setup. `--live` also opens and closes a browser pane in iTerm2. |
 | `blether link <url> [--title …] [--block …]` | Attaches a link. |
+| `blether file <path> [--block …]` | Adds a file by hand, to the block of the chat in this tab (or `--block`). |
 | `blether board` | Opens the home board. |
 | `blether rescan` | Re-reads all transcripts. Manual data is kept. |
 
@@ -506,18 +518,20 @@ This section combines the author's own review with an independent adversarial re
 ### 20.2 Local web server
 
 - **Address.** It binds to `127.0.0.1` only, on a random port. launchd restarts it if it stops. It never quietly moves to a different port.
-- **Fresh secrets on every start:** a session secret, used as a cookie, and a separate write key.
+- **A fresh write key on every start.** There are no cookies. Browsers send cookies for `127.0.0.1` to every port, so a server that another account runs on `127.0.0.1` could receive a cookie and replay it. The write key never travels on its own.
 - **Opening a page.**
-  - The bridge or command line asks for a URL over the Unix socket. It gets `http://127.0.0.1:<port>/auth?code=<code>&next=<page>`, where the code works once and only for 30 seconds.
-  - The service swaps the code for the cookie (`HttpOnly; SameSite=Strict; Path=/`) and sends a 303 redirect to a clean URL with no code in it. So browser history, session restore and synced history never hold a working secret.
+  - The bridge or command line asks for a URL over the Unix socket. It gets `http://127.0.0.1:<port>/auth?code=<code>&next=<page>`. The code lasts 30 seconds.
+  - A valid code returns the page itself, with the write key inside. The page keeps the key only in memory and shows the clean `next` path in the address bar. A used or expired code returns an "expired" page with no key.
+  - Board and Changes codes work once. Panel codes work any number of times within their 30 seconds, because iTerm2 loads the panel separately in every window's toolbelt, all from the one registered URL. iTerm2 also saves that URL in its preferences, which is one more reason the codes expire quickly.
   - For iTerm2 panes, the URL travels through the iTerm2 API.
   - For the default browser, the service writes a small redirect file (mode 0600) in its private `run/` folder and opens that file. The code therefore never appears in process arguments, which other accounts can see with `ps` (verified).
+  - Reloading a page needs a fresh link. When the service restarts, the toolbelt panel reloads and the bridge gives it a fresh link. Other pages say how to reopen them.
 - **Every request** must:
   - have a `Host` header of exactly `127.0.0.1:<port>`, which stops DNS rebinding;
-  - not have `Sec-Fetch-Site` set to `cross-site` or `same-site`. A page on another `127.0.0.1` port arrives as `same-site`, because cookies and the browser's same-site check ignore ports (RFC 6265 §8.5);
-  - carry the session cookie, except for static script and style files, which hold no data.
-- **Changes** (anything other than a read) are `POST` only, with a JSON body. They need an exact `Origin` match and the write key in an `X-Bletherneuk-Key` header. The write key reaches the page inside the authenticated HTML, and the page keeps it only in memory, never in a cookie or storage. A custom header also forces a CORS preflight, which the service never approves.
-- **Live updates** use server-sent events with the same checks. There is no WebSocket. The browser applies no CORS checks to a WebSocket, and a WebSocket can't carry a custom header.
+  - not have `Sec-Fetch-Site` set to `cross-site` or `same-site`. A page on another `127.0.0.1` port arrives as `same-site`, because the browser's same-site check ignores ports (RFC 6265 §8.5). `/auth` is the exception: the default browser reaches it from the local redirect file, which counts as cross-site, and its code is the credential.
+- **Every API request**, reads included, carries the write key in an `X-Bletherneuk-Key` header. A custom header also forces a CORS preflight for any cross-origin caller, and the service never approves one.
+- **Changes** (anything other than a read) are `POST` only, with a JSON body and an exact `Origin` match.
+- **Live updates** use server-sent events, read by the page with `fetch()` so the request can carry the key header. There is no WebSocket. The browser applies no CORS checks to a WebSocket.
 - **No CORS headers are ever sent.** Preflight requests are refused.
 - **Response headers:**
   - `Content-Security-Policy: default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'`
@@ -546,6 +560,7 @@ This section combines the author's own review with an independent adversarial re
 
   A steered chat could add any of these to `.git/config`, or work inside a downloaded folder that already has one. A snapshot would then run it outside Claude Code's sandbox and permission prompts.
 - **libgit2 instead.** All reads, snapshots and diffs go through libgit2, which never runs hooks, fsmonitor, or external filter, textconv or diff programs. Its check that the repo is owned by the current user stays on (`safe.directory` is never overridden). Repos owned by another account are skipped.
+- **Git files that would block.** A downloaded repo could ship `.git/index`, `.git/HEAD`, a branch ref or a root `.gitignore` as a FIFO, which would make libgit2 wait forever. Before libgit2 opens a repo, the service checks that the git files it reads are regular files, and refuses the repo otherwise. As a second line, each snapshot and each repo's worktree refresh runs under a deadline. A repo that misses one is marked stuck and skipped until the service restarts.
 - **Snapshots live in a shadow store** outside the repo (section 13). They can't be pushed by `git push --mirror` or a `refs/*` refspec, and they aren't shared with other worktrees.
 - **Secret-looking files are never snapshotted.** These match `snapshots.skip_patterns`: `.env*`, `*.pem`, `*.key`, `*.p12`, `*.pfx`, `id_rsa*`, `id_ed25519*`, `*credentials*.json`, `*service-account*.json`. The Changes page lists them as skipped. Snapshots also never include ignored files or files that scripts generate (section 13).
 - **`gh` runs from a neutral folder** (the service's own data folder) with `-R <owner>/<repo>`, because `gh` runs `git` in its current folder.
@@ -583,7 +598,7 @@ This section combines the author's own review with an independent adversarial re
   - contain no control or bidirectional-text characters.
 - **Typed text** is only ever `claude --resume <uuid>`, `claude` or `claude --worktree <name>`.
   - The UUID is checked with `re.fullmatch`. `re.match` with `^…$` accepts a trailing newline (verified).
-  - Worktree names must match `^[A-Za-z0-9._-]{1,64}$`.
+  - Worktree names must match `^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$`, so a name can never be read as a flag.
 - **Titles.** iTerm2 treats window and tab titles as interpolated strings, and `\(...)` in one can call functions such as `iterm2.get_string`, which shows a native text prompt. Backslashes are escaped before any title is set. A test checks that `\(iterm2.alert(...))` appears literally.
 - **Bridge functions.** RPC functions the bridge registers take no free-form arguments.
 - **The Unix socket:**
@@ -631,18 +646,18 @@ This section combines the author's own review with an independent adversarial re
 These run in CI (section 21):
 
 - **Web server:**
-  - requests with no cookie, a wrong `Host`, or `Sec-Fetch-Site: same-site` or `cross-site` are refused;
-  - a valid cookie sent from another `127.0.0.1` port is refused;
-  - a `POST` without the write key, or with a wrong `Origin`, is refused;
+  - API requests without the write key, with a wrong `Host`, or with `Sec-Fetch-Site: same-site` or `cross-site` are refused, even when they carry the key;
+  - cookies are never set and never open anything;
+  - a `POST` with a wrong or missing `Origin` is refused;
   - a preflight request gets no CORS headers;
-  - an auth code can't be used twice or after 30 seconds;
-  - a redirect after auth never carries the code.
+  - a board or Changes code can't be used twice, and no code works after 30 seconds;
+  - page paths, and used or expired codes, never return the key.
 - **Pages:** script payloads in every rendered field, including diff code lines and language names, render as text.
 - **Opening:**
   - links with `javascript:`, `file:`, `smb:` or `vscode:` are refused at every step;
   - a symlink named `report.html`, a file not owned by the user, and a disallowed extension are all refused;
   - the handler check refuses Terminal.
-- **Git:** a repo whose config sets `core.fsmonitor`, a clean filter, `textconv` and a `reference-transaction` hook, all pointing at a script that writes a marker file. After a snapshot and a diff, the marker file must not exist.
+- **Git:** a repo whose config sets `core.fsmonitor`, a clean filter, `textconv` and a `reference-transaction` hook, all pointing at a script that writes a marker file. After a snapshot and a diff, the marker file must not exist. Repos with a FIFO as `.git/index`, a branch ref or `.gitignore` are refused without blocking.
 - **Bridge:**
   - a folder containing control characters is refused;
   - a UUID with a trailing newline is refused;

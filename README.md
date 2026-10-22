@@ -63,6 +63,7 @@ Run `blether install --dry-run` to see the changes without making them, and `ble
 - **The panel.** Open the toolbelt (**View → Show Toolbelt**) and tick **bletherneuk** in **Toolbelt → bletherneuk** if it isn't shown.
 - **A key for the board.** In **Settings → Keys → Key Bindings**, add a binding with the action **Invoke Script Function** and the function `bletherneuk_open_board()`.
 - **Browser panes.** iTerm2 asks once whether its browser may open `127.0.0.1`. Allow it.
+- **Reloading a page.** Pages open through one-time links, so a reloaded board or Changes page says it has expired. Reopen it with `blether board`, or from the panel. The panel reconnects by itself.
 
 ## Using it
 
@@ -115,7 +116,7 @@ The full list of settings is in the design, sections 15 and 17.
 bletherneuk runs as you, with no sandbox, so it is built never to turn "a chat wrote a file" or "a chat printed some text" into "code ran". In short:
 
 - No `git` command ever runs inside your repos. Everything goes through libgit2, which never runs hooks, fsmonitor, or filter, textconv or diff programs. Snapshots live in a separate store and never enter your repo.
-- The web server listens on `127.0.0.1` only. It checks `Host` and Fetch Metadata on every request, and needs a session cookie plus a per-start write key in page memory for every change. It sends a strict Content-Security-Policy and no CORS headers.
+- The web server listens on `127.0.0.1` only. It checks `Host` and Fetch Metadata on every request. Pages open only through one-time links, and keep a per-start key in memory that every API request must carry; there are no cookies to leak to other ports. It sends a strict Content-Security-Policy and no CORS headers.
 - Files open only by ID, as documents in their default app, and never with a terminal or script runner. Links open only if they are `http` or `https`.
 - The Unix socket is private to your user, and the hook never prints anything.
 
