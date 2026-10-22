@@ -177,6 +177,7 @@ CREATE TABLE prs (
     review_decision TEXT,
     checks          TEXT,                  -- passing | failing | pending | none
     url             TEXT,
+    cross_repo      INTEGER NOT NULL DEFAULT 0,  -- from a fork
     updated_at      INTEGER NOT NULL,
     PRIMARY KEY (github, number)
 );

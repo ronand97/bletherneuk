@@ -41,6 +41,8 @@ pub struct Pr {
     pub review_decision: Option<String>,
     pub checks: Checks,
     pub url: String,
+    /// From a fork: its head branch name says nothing about branches in this repo.
+    pub cross_repo: bool,
 }
 
 #[derive(Deserialize)]
@@ -61,6 +63,8 @@ struct RawPr {
     status_check_rollup: Option<Value>,
     #[serde(default)]
     url: String,
+    #[serde(default)]
+    is_cross_repository: bool,
 }
 
 pub fn parse_pr_list(json: &[u8]) -> anyhow::Result<Vec<Pr>> {
@@ -76,6 +80,7 @@ pub fn parse_pr_list(json: &[u8]) -> anyhow::Result<Vec<Pr>> {
             review_decision: r.review_decision.filter(|s| !s.is_empty()),
             checks: summarise_checks(r.status_check_rollup.as_ref()),
             url: r.url,
+            cross_repo: r.is_cross_repository,
         })
         .collect())
 }
@@ -164,6 +169,7 @@ mod tests {
                 review_decision: None,
                 checks: Checks::None,
                 url: "https://github.com/acme/shop/pull/42".into(),
+                cross_repo: false,
             }]
         );
     }

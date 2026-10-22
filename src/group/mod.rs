@@ -411,14 +411,17 @@ fn related_keys(conn: &Connection, key: &Key, prefixes: &[String]) -> rusqlite::
     };
     match key {
         Key::Pr { repo, number } => {
-            let row: Option<(Option<String>, Option<String>)> = conn
+            let row: Option<(Option<String>, Option<String>, bool)> = conn
                 .query_row(
-                    "SELECT title, head_branch FROM prs WHERE github = ?1 AND number = ?2",
+                    "SELECT title, head_branch, cross_repo FROM prs WHERE github = ?1 AND number = ?2",
                     params![repo, *number as i64],
-                    |r| Ok((r.get(0)?, r.get(1)?)),
+                    |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
                 )
                 .optional()?;
-            if let Some((title, head)) = row {
+            if let Some((title, head, cross_repo)) = row {
+                // A fork's branch, or a PR from the default branch, says nothing about
+                // which branch of ours the work is on.
+                let head = head.filter(|h| !cross_repo && !is_default_branch(conn, repo, h));
                 from_pr(title, head, repo, &mut out)?;
             }
         }
@@ -428,7 +431,7 @@ fn related_keys(conn: &Connection, key: &Key, prefixes: &[String]) -> rusqlite::
                 .query_row(
                     "SELECT p.github, p.number, p.title FROM prs p
                      JOIN repos r ON r.github = p.github
-                     WHERE r.root = ?1 AND p.head_branch = ?2
+                     WHERE r.root = ?1 AND p.head_branch = ?2 AND p.cross_repo = 0
                      ORDER BY p.number DESC LIMIT 1",
                     params![repo_root, branch],
                     |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
@@ -443,6 +446,23 @@ fn related_keys(conn: &Connection, key: &Key, prefixes: &[String]) -> rusqlite::
     }
     out.retain(|k| k != key);
     Ok(out)
+}
+
+/// True when `branch` is the default branch of the local checkouts of `github`
+/// (or `main`/`master` when that isn't known).
+fn is_default_branch(conn: &Connection, github: &str, branch: &str) -> bool {
+    let defaults: Vec<Option<String>> = conn
+        .prepare("SELECT default_branch FROM repos WHERE github = ?1")
+        .and_then(|mut s| {
+            s.query_map([github], |r| r.get(0))
+                .map(|r| r.flatten().collect())
+        })
+        .unwrap_or_default();
+    if defaults.iter().any(|d| d.is_some()) {
+        defaults.iter().flatten().any(|d| d == branch)
+    } else {
+        branch == "main" || branch == "master"
+    }
 }
 
 /// Recomputes a block's title, repo, last activity, automatic links and archive flag.
@@ -658,12 +678,13 @@ pub fn apply_prs(
     for p in prs {
         conn.execute(
             "INSERT INTO prs(github, number, title, head_branch, state, is_draft, review_decision,
-                             checks, url, updated_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
+                             checks, url, updated_at, cross_repo)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)
              ON CONFLICT(github, number) DO UPDATE SET
                 title = excluded.title, head_branch = excluded.head_branch, state = excluded.state,
                 is_draft = excluded.is_draft, review_decision = excluded.review_decision,
-                checks = excluded.checks, url = excluded.url, updated_at = excluded.updated_at",
+                checks = excluded.checks, url = excluded.url, updated_at = excluded.updated_at,
+                cross_repo = excluded.cross_repo",
             params![
                 github,
                 p.number as i64,
@@ -674,7 +695,8 @@ pub fn apply_prs(
                 p.review_decision,
                 p.checks.as_str(),
                 crate::links::validate(&p.url).ok().map(|u| u.to_string()),
-                now
+                now,
+                p.cross_repo
             ],
         )?;
     }

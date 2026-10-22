@@ -111,6 +111,7 @@ fn pr(number: u64, title: &str, head: &str, state: &str) -> Pr {
         review_decision: None,
         checks: Checks::Passing,
         url: format!("https://github.com/acme/shop/pull/{number}"),
+        cross_repo: false,
     }
 }
 
@@ -443,4 +444,55 @@ fn ticket_keys_become_jira_links_and_manual_titles_win() {
         })
         .unwrap();
     assert_eq!(title, "Retry ticket");
+}
+
+#[test]
+fn fork_prs_and_default_branch_heads_never_join_by_branch() {
+    let mut env = Env::new();
+    let r = setup(&mut env);
+    add_chat(
+        env.store.conn(),
+        ChatSpec {
+            title: Some("Review PR #42"),
+            ..chat("review", &r.root, "main")
+        },
+    );
+    add_chat(env.store.conn(), chat("work", &r.wt, "feat/retry"));
+    let review = place(&env, "review").unwrap();
+    let work = place(&env, "work").unwrap();
+    let fork = |n, head: &str| Pr {
+        cross_repo: true,
+        ..pr(n, &format!("Fork PR {n}"), head, "OPEN")
+    };
+    apply_prs(
+        env.store.conn(),
+        &env.config,
+        "acme/shop",
+        &[fork(42, "main"), fork(57, "main"), fork(58, "feat/retry")],
+        NOW,
+    )
+    .unwrap();
+    let c = env.store.conn();
+    assert_eq!(block_count(c), 2, "no merges through fork branches");
+    let keys: Vec<String> = c
+        .prepare("SELECT key FROM block_keys WHERE block_id = ?1")
+        .unwrap()
+        .query_map([review], |r| r.get(0))
+        .unwrap()
+        .map(Result::unwrap)
+        .collect();
+    assert_eq!(keys, vec!["pr:acme/shop#42".to_string()]);
+    assert_eq!(title(c, review), "Fork PR 42");
+    assert_eq!(title(c, work), "feat/retry");
+
+    // A same-repo PR opened from the default branch doesn't join by branch either.
+    apply_prs(
+        env.store.conn(),
+        &env.config,
+        "acme/shop",
+        &[pr(42, "From main", "main", "OPEN")],
+        NOW,
+    )
+    .unwrap();
+    assert_eq!(block_count(env.store.conn()), 2);
 }
