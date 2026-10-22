@@ -121,7 +121,7 @@ All state lives in SQLite at `~/Library/Application Support/bletherneuk/index.db
 | `block_keys` | The keys that map to a block: `pr:<owner>/<repo>#<n>`, `ticket:<KEY-123>`, `branch:<repo-root>@<branch>` |
 | `links` | Block ID, kind (`github_pr`, `jira`, `notion`, `other`), URL, title, status (PRs only), source (`auto` or `manual`) |
 | `files` | Block ID, chat ID, path, kind (`doc` or `output`), how it was found, size, modified time, path of the saved copy if any, hidden flag |
-| `turns` | Chat ID, prompt text, start and end times, start and end snapshot IDs |
+| `turns` | Chat ID, prompt text, start and end times, start and end snapshot IDs, and the files changed and lines added and removed (saved when the turn ends, so they outlive deleted snapshots) |
 | `snapshots` | ID, repo, worktree path, git tree ID, time, reason (`turn_start`, `turn_end`, `review`) |
 | `review_markers` | Block ID, worktree, snapshot ID, time |
 | `overrides` | Your manual changes: chat moves, block renames, hidden files, added files, and the block a chat was started from |
@@ -260,7 +260,13 @@ This replaces running `caffeinate` by hand and guessing how long a chat will tak
 
 ## 13. Snapshots and the Changes page
 
-A **snapshot** is a git tree object recording the content of a worktree at one moment. It includes untracked files that aren't ignored. It never touches the working files, the branch or the staging area.
+A **snapshot** is a git tree object recording the content of a worktree's code at one moment. It never touches the working files, the branch or the staging area.
+
+**What a snapshot includes**
+
+- **Every file git tracks**, meaning every file in the worktree's index, including newly staged ones, at its current content.
+- **New files a chat wrote itself.** These are untracked files that a chat in this worktree created or changed with its `Write`, `Edit`, `MultiEdit` or `NotebookEdit` tools, taken from the transcript. Two kinds are left out: files with an extension on the outputs list (section 10), and files over 1 MB (`snapshots.new_file_max_mb`). Once such a file is in a snapshot, later snapshots keep including it until it is deleted, tracked or ignored. Otherwise it would look deleted in the next diff.
+- **Nothing else.** Files that scripts generate (reports, CSVs, maps, caches) are never included, however often they are regenerated. Outputs are listed in the panel instead (section 10).
 
 **When snapshots are taken**
 
@@ -273,13 +279,19 @@ A **snapshot** is a git tree object recording the content of a worktree at one m
 - **A shadow store per repo.** Snapshot data goes into a bare repo the service owns, at `~/Library/Application Support/bletherneuk/snapshots/<repo-id>.git`. The user repo's object database is added as a read-only alternate, so file contents git already has are not copied again. Snapshot data never enters the user's repo, so it can never be pushed. It adds nothing to the repo's size.
 - **Steps:**
   1. The service opens the shadow store, with the worktree set as its working directory.
-  2. It loads a temporary copy of the worktree's own index, so files that haven't changed since git last saw them are not hashed again.
-  3. It adds every changed and untracked file that isn't ignored, writing new contents into the shadow store.
+  2. It loads a temporary copy of the worktree's own index, so tracked files that haven't changed since git last saw them are not hashed again.
+  3. It updates the tracked files that have changed, and adds the chat-written new files described above. New contents are written into the shadow store.
   4. It writes a tree and records its ID.
 - **Files that are skipped:**
-  - untracked files over 20 MB (`snapshots.untracked_max_mb`);
-  - files whose names look like secrets (`snapshots.skip_patterns`, section 20.4).
-- **Limits.** Each snapshot has a budget of new data, file count and time (section 20.9).
+  - **Large tracked files.** A tracked file over 5 MB that has changed (`snapshots.tracked_max_mb`), such as a committed data file, keeps its previous content in the snapshot. The diff lists it as "changed, too large to snapshot".
+  - **Secret-looking files.** Files whose names look like secrets (`snapshots.skip_patterns`, section 20.4).
+- **Limits per snapshot.** Each snapshot has a budget of new data, file count and time (section 20.9).
+- **Limit per repo.** Each repo's shadow store is limited to 2 GB (`snapshots.max_store_gb`). When it goes over:
+  1. The service deletes the oldest snapshots taken before their block's latest review marker.
+  2. If the store is still over, it deletes the oldest remaining snapshots, but always keeps the latest snapshot of each worktree and every review marker's snapshot.
+  3. It prunes unreferenced objects.
+
+  Each turn's change counts (files changed, lines added and removed) are saved in the `turns` table when the turn ends. So the timeline keeps its numbers after a snapshot is deleted. Opening a deleted turn's diff shows "snapshot deleted to save space".
 - **Keeping and pruning.** Each snapshot tree is kept alive by a ref in the shadow store (`refs/snap/<snapshot-id>`). Snapshots of archived blocks are deleted after 30 days (`snapshots.keep_days_after_archive`). Unreferenced objects are then pruned from the shadow store.
 - **Known limitation.** A snapshot can refer to file contents that live only in the user's repo, through the alternates link. If the user rewrites history and the repo's own `git gc` later removes those contents, older diffs show "content no longer available" for the files affected. Git keeps unreachable objects for two weeks by default, and agents' commits keep most contents reachable.
 
@@ -292,7 +304,13 @@ A **snapshot** is a git tree object recording the content of a worktree at one m
   - whole branch: from the merge base with the default branch to now.
 - **Parallel chats.** When another chat was active in the same worktree during a turn, the turn shows a note: "other chats were working here; this diff may include their changes".
 - **Diff.** The service diffs the two trees with libgit2, with rename detection and no textconv or external diff programs. It sends the result to the page as structured JSON (files, hunks, lines). The page highlights it with Shiki. Lockfiles, minified files and files over 5,000 changed lines start collapsed. Binary files are listed but not shown.
-- **Not in this diff.** A list under the diff shows what a snapshot cannot. The list comes from the chats' tool calls in the transcripts. It covers files the chats wrote outside the worktree (for example `~/.zshrc`), inside `.git/`, or that are ignored, plus files skipped for size or for looking like secrets. "Mark reviewed" only covers what the diff shows, and this list makes the gap visible.
+- **Not in this diff.** A list under the diff shows what a snapshot doesn't cover, taken from the chats' tool calls and the snapshot itself. It lists:
+  - files the chats wrote outside the worktree (for example `~/.zshrc`), inside `.git/`, or that are ignored;
+  - new files left out because of their extension or size;
+  - tracked files that changed but were too large to snapshot;
+  - files skipped because they look like secrets.
+
+  Files created by scripts aren't listed here. Outputs appear in the panel's Outputs list. "Mark reviewed" only covers what the diff shows, and this list makes the gap visible.
 - **Mark reviewed** takes a `review` snapshot and moves the marker to it.
 
 ## 14. iTerm2 bridge
@@ -414,7 +432,9 @@ copy_max_mb = 200
 copies_max_total_gb = 5
 
 [snapshots]
-untracked_max_mb = 20
+new_file_max_mb = 1
+tracked_max_mb = 5
+max_store_gb = 2
 keep_days_after_archive = 30
 skip_patterns = [".env*", "*.pem", "*.key", "*.p12", "*.pfx", "id_rsa*", "id_ed25519*", "*credentials*.json", "*service-account*.json"]
 max_new_data_mb = 500
@@ -527,7 +547,7 @@ This section combines the author's own review with an independent adversarial re
   A steered chat could add any of these to `.git/config`, or work inside a downloaded folder that already has one. A snapshot would then run it outside Claude Code's sandbox and permission prompts.
 - **libgit2 instead.** All reads, snapshots and diffs go through libgit2, which never runs hooks, fsmonitor, or external filter, textconv or diff programs. Its check that the repo is owned by the current user stays on (`safe.directory` is never overridden). Repos owned by another account are skipped.
 - **Snapshots live in a shadow store** outside the repo (section 13). They can't be pushed by `git push --mirror` or a `refs/*` refspec, and they aren't shared with other worktrees.
-- **Secret-looking files are never snapshotted.** These match `snapshots.skip_patterns`: `.env*`, `*.pem`, `*.key`, `*.p12`, `*.pfx`, `id_rsa*`, `id_ed25519*`, `*credentials*.json`, `*service-account*.json`. The Changes page lists them as skipped. Ignored files are never snapshotted either.
+- **Secret-looking files are never snapshotted.** These match `snapshots.skip_patterns`: `.env*`, `*.pem`, `*.key`, `*.p12`, `*.pfx`, `id_rsa*`, `id_ed25519*`, `*credentials*.json`, `*service-account*.json`. The Changes page lists them as skipped. Snapshots also never include ignored files or files that scripts generate (section 13).
 - **`gh` runs from a neutral folder** (the service's own data folder) with `-R <owner>/<repo>`, because `gh` runs `git` in its current folder.
   - `owner/repo` must match `^[A-Za-z0-9-]+/[A-Za-z0-9._-]+$`, and PR numbers must be digits.
   - Arguments are passed as a list, never through a shell.
@@ -643,7 +663,11 @@ Tests pass explicit values. They never rely on defaults from the config.
   - the hook status state machine, including background work;
   - keep-awake requests: starting, the grace period, the 12-hour cap, block-level requests, and restoring after a restart. These use a fake clock and a fake `caffeinate` launcher.
 - **Integration tests:**
-  - snapshots, diff ranges and pruning, in temporary git repos and worktrees;
+  - snapshots, diff ranges and pruning, in temporary git repos and worktrees, covering:
+    - what a snapshot includes: tracked files, chat-written new files, and new files left out for their extension or size;
+    - a chat-written file staying in later snapshots;
+    - large tracked files keeping their previous content;
+    - the per-repo store limit deleting reviewed snapshots first while the timeline keeps its counts;
   - worktree discovery, branch switches, detached `HEAD`, removed worktrees, uncommitted counts, and commits ahead and behind, in temporary repos;
   - a chat started from a block in a new worktree being assigned to that block;
   - PR status, against a fake `gh` placed first on `PATH` that returns canned JSON;
