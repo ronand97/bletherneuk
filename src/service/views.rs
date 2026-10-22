@@ -846,8 +846,12 @@ pub fn diff(
     };
     let files = diff::diff_trees(&shadow.repo, from, to, false).map_err(|e| e.to_string())?;
     let totals = diff::totals(&files);
+    // For ranges that end "now", the page sends this back to Mark reviewed, so the
+    // marker covers exactly what was shown.
+    let to_tree = (kind != "turn").then(|| to.to_string());
     Ok(json!({
         "worktree": wid,
+        "to_tree": to_tree,
         "range": {"kind": kind, "from_label": from_label, "to_label": to_label},
         "files": files,
         "totals": totals,

@@ -198,6 +198,46 @@ pub fn take(app: &App, worktree: &Path, reason: &str, extra: &[PathBuf]) -> Resu
     Ok(id)
 }
 
+/// Records a tree the page already showed (from [`now_tree`]) as a snapshot, so a review
+/// covers exactly what was on screen. Fails if the tree is no longer in the store.
+pub fn record_tree(app: &App, worktree: &Path, tree: &str, reason: &str) -> Result<i64, String> {
+    if tree.len() != 40 || !tree.chars().all(|c| c.is_ascii_hexdigit()) {
+        return Err("not a snapshot".into());
+    }
+    let oid = Oid::from_str(tree).map_err(|e| e.to_string())?;
+    let loc = app
+        .locator
+        .lock()
+        .expect("locator lock")
+        .locate(worktree)
+        .ok_or("not a git repo")?;
+    let lock = repo_lock(app, &loc.repo_root);
+    let _guard = lock.lock().expect("repo lock");
+    let shadow = Shadow::open(&app.paths.snapshots(), &loc.repo_root).map_err(|e| e.to_string())?;
+    if !shadow.has_tree(oid) {
+        return Err("this view is out of date; reload it and review again".into());
+    }
+    let id = {
+        let db = app.db.lock().expect("db lock");
+        db.conn()
+            .execute(
+                "INSERT INTO snapshots(repo_root, worktree_path, tree_id, taken_at, reason)
+                 VALUES (?1, ?2, ?3, ?4, ?5)",
+                params![
+                    loc.repo_root.to_string_lossy(),
+                    loc.worktree.to_string_lossy(),
+                    oid.to_string(),
+                    crate::util::now_ms(),
+                    reason
+                ],
+            )
+            .map_err(|e| e.to_string())?;
+        db.conn().last_insert_rowid()
+    };
+    shadow.keep(id, oid).map_err(|e| e.to_string())?;
+    Ok(id)
+}
+
 /// A snapshot of the worktree right now that isn't recorded, for "… to now" diffs.
 pub fn now_tree(app: &App, worktree: &Path) -> Result<(Shadow, Oid, Skipped), String> {
     let loc = app

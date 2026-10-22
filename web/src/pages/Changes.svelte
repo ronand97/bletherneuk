@@ -165,7 +165,11 @@
 
   async function markReviewed(): Promise<void> {
     if (blockId === null || worktree === null) return;
-    const ok = await reviewAction.run(apiPath('blocks', blockId, 'review'), { worktree });
+    // Mark exactly what's on screen as reviewed, not whatever the worktree holds now.
+    const ok = await reviewAction.run(apiPath('blocks', blockId, 'review'), {
+      worktree,
+      tree: diff?.to_tree ?? null,
+    });
     if (!ok) return;
     await loadTimeline();
     range = 'review';

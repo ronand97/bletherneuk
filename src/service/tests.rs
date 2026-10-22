@@ -291,7 +291,7 @@ fn review_then_diff_shows_only_later_changes() {
         .enable_all()
         .build()
         .unwrap();
-    rt.block_on(actions::mark_reviewed(&t.app, block, wid))
+    rt.block_on(actions::mark_reviewed(&t.app, block, wid, None))
         .unwrap();
     std::fs::write(wt.join("README.md"), "after review\n").unwrap();
 
@@ -570,4 +570,54 @@ fn an_old_interrupt_doesnt_stop_a_newer_turn() {
     let path = write_interrupt(&t, &root, start + 5_000);
     tasks::ingest_one(&t.app, &path);
     assert_eq!(status_of(&t.app, CHAT), "working");
+}
+
+#[test]
+fn mark_reviewed_covers_exactly_what_was_shown() {
+    let t = test_app();
+    let (block, wt) = seed_block(&t);
+    let wid = views::worktree_path(&t.app, block, None).unwrap().0;
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    rt.block_on(actions::mark_reviewed(&t.app, block, wid, None))
+        .unwrap();
+
+    std::fs::write(wt.join("README.md"), "seen\n").unwrap();
+    let shown = views::diff(&t.app, block, Some(wid), "review", None).unwrap();
+    let tree = shown["to_tree"].as_str().unwrap().to_string();
+    // More changes land after the page loaded.
+    std::fs::write(wt.join("README.md"), "seen\nnot yet seen\n").unwrap();
+    rt.block_on(actions::mark_reviewed(&t.app, block, wid, Some(&tree)))
+        .unwrap();
+
+    let after = views::diff(&t.app, block, Some(wid), "review", None).unwrap();
+    assert_eq!(
+        after["totals"]["files"], 1,
+        "the unseen change is still to review"
+    );
+    assert_eq!(
+        after["files"][0]["hunks"][0]["lines"][1]["text"],
+        "not yet seen"
+    );
+
+    assert!(
+        rt.block_on(actions::mark_reviewed(
+            &t.app,
+            block,
+            wid,
+            Some("not-a-tree")
+        ))
+        .is_err()
+    );
+    assert!(
+        rt.block_on(actions::mark_reviewed(
+            &t.app,
+            block,
+            wid,
+            Some(&"0".repeat(40))
+        ))
+        .is_err()
+    );
 }

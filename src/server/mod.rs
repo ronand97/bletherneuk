@@ -546,6 +546,7 @@ async fn block_add_file(
 #[derive(Deserialize)]
 struct ReviewBody {
     worktree: i64,
+    tree: Option<String>,
 }
 
 async fn block_review(
@@ -553,7 +554,7 @@ async fn block_review(
     Path(id): Path<i64>,
     Json(b): Json<ReviewBody>,
 ) -> Response {
-    outcome(actions::mark_reviewed(&app, id, b.worktree).await)
+    outcome(actions::mark_reviewed(&app, id, b.worktree, b.tree.as_deref()).await)
 }
 
 async fn block_changes(

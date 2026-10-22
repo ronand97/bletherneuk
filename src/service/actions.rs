@@ -594,15 +594,20 @@ pub fn choose_file_dialog() -> Option<PathBuf> {
     p.is_absolute().then_some(p)
 }
 
-/// Takes a review snapshot and moves the block's marker to it.
-pub async fn mark_reviewed(app: &Shared, block: i64, worktree: i64) -> Outcome {
+/// Moves the block's review marker. With `tree` (from the diff the page showed), the
+/// marker records exactly that; otherwise a fresh review snapshot is taken.
+pub async fn mark_reviewed(app: &Shared, block: i64, worktree: i64, tree: Option<&str>) -> Outcome {
     let (_, path) =
         super::views::worktree_path(app, block, Some(worktree)).ok_or("no such worktree here")?;
     let a = app.clone();
     let p = PathBuf::from(&path);
-    let snap = tokio::task::spawn_blocking(move || super::snapshots::take(&a, &p, "review", &[]))
-        .await
-        .map_err(|e| e.to_string())??;
+    let tree = tree.map(str::to_string);
+    let snap = tokio::task::spawn_blocking(move || match tree {
+        Some(t) => super::snapshots::record_tree(&a, &p, &t, "review"),
+        None => super::snapshots::take(&a, &p, "review", &[]),
+    })
+    .await
+    .map_err(|e| e.to_string())??;
     {
         let db = app.db.lock().expect("db lock");
         db.conn()

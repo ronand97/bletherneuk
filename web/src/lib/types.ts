@@ -212,7 +212,10 @@ export interface NotInDiffItem {
 }
 
 export interface DiffResponse {
+  worktree?: number | null;
   range: { kind: RangeKind; from_label: string; to_label: string };
+  /** The snapshot shown as "now"; Mark reviewed records exactly this. */
+  to_tree?: string | null;
   files: FileDiff[];
   totals: { files: number; additions: number; deletions: number };
   not_in_diff: NotInDiffItem[];

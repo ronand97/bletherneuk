@@ -172,6 +172,7 @@ Both lists are newest first.
 ```json
 {
   "worktree": 7,
+  "to_tree": "<40 hex characters>" or null,
   "range": {"kind": "review|branch|turn", "from_label": "...", "to_label": "..."},
   "files": [FileDiff],
   "totals": {"files": 3, "additions": 10, "deletions": 2},
@@ -181,7 +182,7 @@ Both lists are newest first.
 }
 ```
 
-`worktree` defaults to the worktree with the most recent turn; the response says which one it used. `range` defaults to `review`. With no review yet, `review` falls back to `branch`.
+`worktree` defaults to the worktree with the most recent turn; the response says which one it used. For ranges that end "now", `to_tree` identifies the snapshot shown; pass it to `review` so the marker covers exactly what was on screen. `range` defaults to `review`. With no review yet, `review` falls back to `branch`.
 
 **`GET /api/theme`** returns `{"vars": {"--background": "#24273a", ...}}`. Pages set each variable on `document.documentElement` with `style.setProperty`.
 
@@ -211,7 +212,7 @@ Every action returns `{"ok": true}` or `{"ok": false, "error": "<text>"}`. Actio
 | `POST /api/blocks/<id>/keep-awake` | `{"on": bool}` | Covers the chats working right now. |
 | `POST /api/blocks/<id>/links` | `{"url": "...", "title": "..." or null}` | Adds a link. Only `http` and `https`. |
 | `POST /api/blocks/<id>/add-file` | `{}` | Shows a native file picker, then adds the chosen file. |
-| `POST /api/blocks/<id>/review` | `{"worktree": id}` | Marks reviewed. |
+| `POST /api/blocks/<id>/review` | `{"worktree": id, "tree": "<to_tree from the diff>" or null}` | Marks reviewed. With `tree`, exactly what was shown; without it, the worktree as it is now. |
 | `POST /api/blocks/<id>/changes` | `{}` | Opens the Changes page next to the focused chat. |
 | `POST /api/board/open` | `{}` | Opens the board in its own window. |
 | `POST /api/links/<id>/open` | `{}` | Opens in the default browser. |
