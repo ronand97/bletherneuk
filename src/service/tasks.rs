@@ -236,8 +236,8 @@ pub fn refresh_worktrees(app: &super::App, count_for: Option<&BTreeSet<String>>)
     let now = now_ms();
     let mut changed = false;
     for root in roots {
-        let list = crate::worktrees::list(Path::new(&root));
-        if list.is_empty() {
+        let root_path = PathBuf::from(&root);
+        if app.is_stuck(&root_path) {
             continue;
         }
         let default_branch: Option<String> = {
@@ -251,25 +251,43 @@ pub fn refresh_worktrees(app: &super::App, count_for: Option<&BTreeSet<String>>)
                 .ok()
                 .flatten()
         };
-        for w in &list {
+        // All git reads for this repo run under one deadline; a repo that never answers
+        // is skipped from then on.
+        let (r, d, set) = (root.clone(), default_branch.clone(), count_for.cloned());
+        let read = crate::util::with_deadline(Duration::from_secs(20), move || {
+            crate::worktrees::list(Path::new(&r))
+                .into_iter()
+                .map(|w| {
+                    let path = w.path.to_string_lossy().into_owned();
+                    let counted = set.as_ref().is_none_or(|s| s.contains(&path)) && !w.removed;
+                    if !counted {
+                        return (w, None, None);
+                    }
+                    let unc = crate::worktrees::uncommitted(&w.path, budget).map(|c| match c {
+                        crate::worktrees::Count::Exact(n) => n as i64,
+                        crate::worktrees::Count::Many => -1,
+                    });
+                    let ab = d
+                        .as_deref()
+                        .and_then(|d| crate::worktrees::ahead_behind(&w.path, d));
+                    (w, unc, ab)
+                })
+                .collect::<Vec<_>>()
+        });
+        let Some(entries) = read else {
+            app.mark_stuck(&root_path);
+            continue;
+        };
+        if entries.is_empty() {
+            continue;
+        }
+        let list: Vec<crate::worktrees::Worktree> = entries.iter().map(|e| e.0.clone()).collect();
+        for (w, uncommitted, ahead_behind) in entries {
             let path = w.path.to_string_lossy().into_owned();
             let (branch, detached) = match &w.head {
                 crate::worktrees::Head::Branch(b) => (Some(b.clone()), None),
                 crate::worktrees::Head::Detached(c) => (None, Some(c.clone())),
                 crate::worktrees::Head::Unborn => (None, None),
-            };
-            let counted = count_for.is_none_or(|set| set.contains(&path)) && !w.removed;
-            let (uncommitted, ahead_behind) = if counted {
-                let unc = crate::worktrees::uncommitted(&w.path, budget).map(|c| match c {
-                    crate::worktrees::Count::Exact(n) => n as i64,
-                    crate::worktrees::Count::Many => -1,
-                });
-                let ab = default_branch
-                    .as_deref()
-                    .and_then(|d| crate::worktrees::ahead_behind(&w.path, d));
-                (unc, ab)
-            } else {
-                (None, None)
             };
             let db = app.db.lock().expect("db lock");
             let n = db

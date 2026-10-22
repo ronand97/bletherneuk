@@ -38,7 +38,32 @@ pub fn spawn_worker(app: Shared, mut rx: tokio::sync::mpsc::UnboundedReceiver<Jo
         .expect("spawn snapshot thread");
 }
 
-pub fn run_job(app: &App, job: &Job) {
+/// Runs one job with a deadline, so a repo that hangs git reads can't stop every later
+/// snapshot. Such a repo is marked stuck.
+pub fn run_job(app: &Shared, job: &Job) {
+    let limit = Duration::from_secs(app.config().snapshots.max_seconds + 15);
+    let (a, j) = (app.clone(), job.clone());
+    if crate::util::with_deadline(limit, move || run_job_now(&a, &j)).is_some() {
+        return;
+    }
+    let root = app
+        .locator
+        .lock()
+        .expect("locator lock")
+        .locate(&job.worktree);
+    if let Some(l) = root {
+        app.mark_stuck(&l.repo_root);
+    }
+    if let Some((turn, _)) = job.turn {
+        let db = app.db.lock().expect("db lock");
+        let _ = db.conn().execute(
+            "UPDATE turns SET missed = 'snapshot missed: the repo isn''t responding' WHERE id = ?1",
+            [turn],
+        );
+    }
+}
+
+fn run_job_now(app: &App, job: &Job) {
     let result = take(app, &job.worktree, job.reason, &job.extra);
     let Some((turn, edge)) = job.turn else {
         return;
@@ -134,6 +159,9 @@ pub fn take(app: &App, worktree: &Path, reason: &str, extra: &[PathBuf]) -> Resu
         .expect("locator lock")
         .locate(worktree)
         .ok_or("not a git repo")?;
+    if app.is_stuck(&loc.repo_root) {
+        return Err("the repo isn't responding".into());
+    }
     let lock = repo_lock(app, &loc.repo_root);
     let _guard = lock.lock().expect("repo lock");
     let mut files = chat_files(app, &loc.worktree);
@@ -178,6 +206,9 @@ pub fn now_tree(app: &App, worktree: &Path) -> Result<(Shadow, Oid, Skipped), St
         .expect("locator lock")
         .locate(worktree)
         .ok_or("not a git repo")?;
+    if app.is_stuck(&loc.repo_root) {
+        return Err("the repo isn't responding".into());
+    }
     let lock = repo_lock(app, &loc.repo_root);
     let _guard = lock.lock().expect("repo lock");
     let files = chat_files(app, &loc.worktree);

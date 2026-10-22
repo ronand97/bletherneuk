@@ -71,8 +71,11 @@ impl UiEvent {
 pub struct Session {
     pub window: Option<String>,
     pub tab: Option<String>,
-    /// Set for sessions the bridge opened for a block (design §9).
+    /// Set only for new chats the bridge started from a block (design §9). The chat
+    /// that starts in this session joins that block.
     pub block: Option<i64>,
+    /// The block whose window holds the session. Used only to work out focus.
+    pub window_block: Option<i64>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -173,6 +176,8 @@ pub struct App {
     pub snap_tx: mpsc::UnboundedSender<snapshots::Job>,
     /// Asks the worktree job to refresh now (a branch switch, or new repos found).
     pub worktrees_now: Arc<tokio::sync::Notify>,
+    /// Repos where a git operation never returned. They're skipped until a restart.
+    pub stuck: Mutex<std::collections::HashSet<PathBuf>>,
 }
 
 pub type Shared = Arc<App>;
@@ -231,6 +236,7 @@ impl App {
             ingest_tx,
             snap_tx,
             worktrees_now: Arc::new(tokio::sync::Notify::new()),
+            stuck: Mutex::new(std::collections::HashSet::new()),
         };
         (
             Arc::new(app),
@@ -307,6 +313,18 @@ impl App {
             ("changes", Some(b)) => Some(format!("/changes?block={b}")),
             _ => None,
         }
+    }
+
+    pub fn is_stuck(&self, repo_root: &std::path::Path) -> bool {
+        self.stuck.lock().expect("stuck lock").contains(repo_root)
+    }
+
+    pub fn mark_stuck(&self, repo_root: &std::path::Path) {
+        tracing::warn!("a repo stopped responding to git reads; skipping it until restart");
+        self.stuck
+            .lock()
+            .expect("stuck lock")
+            .insert(repo_root.to_path_buf());
     }
 
     pub fn reload_config(&self) {

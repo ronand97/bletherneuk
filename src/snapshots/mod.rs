@@ -174,6 +174,12 @@ impl Shadow {
                     return 1;
                 }
                 if let Ok(meta) = std::fs::symlink_metadata(worktree.join(path)) {
+                    // A tracked path replaced by a FIFO, socket or device would block
+                    // the read; keep its previous content instead.
+                    let t = meta.file_type();
+                    if !t.is_file() && !t.is_symlink() && !t.is_dir() {
+                        return 1;
+                    }
                     if meta.is_file() && meta.len() > limits.tracked_max {
                         too_large.push(rel);
                         return 1;
@@ -325,12 +331,7 @@ impl Shadow {
 }
 
 fn open_user(path: &Path) -> Option<Repository> {
-    Repository::open_ext(
-        path,
-        RepositoryOpenFlags::NO_SEARCH,
-        std::iter::empty::<&Path>(),
-    )
-    .ok()
+    crate::worktrees::open(path)
 }
 
 struct RemoveOnDrop(PathBuf);

@@ -33,6 +33,23 @@ pub fn write_private_atomic(path: &Path, data: &[u8]) -> std::io::Result<()> {
     result
 }
 
+/// Runs `f` on its own thread and gives up waiting after `d`. A call that never returns
+/// (libgit2 reading a FIFO in a hostile repo, say) then costs one parked thread instead
+/// of stalling the caller.
+pub fn with_deadline<T: Send + 'static>(
+    d: std::time::Duration,
+    f: impl FnOnce() -> T + Send + 'static,
+) -> Option<T> {
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::Builder::new()
+        .name("deadline".into())
+        .spawn(move || {
+            let _ = tx.send(f());
+        })
+        .ok()?;
+    rx.recv_timeout(d).ok()
+}
+
 /// Text cut to at most `max` characters, on a character boundary.
 pub fn truncate_chars(s: &str, max: usize) -> String {
     match s.char_indices().nth(max) {

@@ -57,7 +57,11 @@ pub enum Count {
     Many,
 }
 
-fn open(path: &Path) -> Option<Repository> {
+/// Opens the repo at `path` (no searching), after checking its git files are safe to read.
+pub fn open(path: &Path) -> Option<Repository> {
+    if !metadata_is_safe(path, false) {
+        return None;
+    }
     Repository::open_ext(
         path,
         RepositoryOpenFlags::NO_SEARCH,
@@ -75,11 +79,126 @@ fn discover(path: &Path) -> Option<Repository> {
     };
     while let Some(d) = dir {
         if d.exists() {
+            if !metadata_is_safe(d, true) {
+                return None;
+            }
             return Repository::discover(d).ok();
         }
         dir = d.parent();
     }
     None
+}
+
+/// True if `p` is missing or a regular file (following symlinks). A FIFO, socket or
+/// device would make libgit2 block forever when it reads it.
+fn file_ok(p: &Path) -> bool {
+    match std::fs::metadata(p) {
+        Err(_) => true,
+        Ok(m) => m.is_file(),
+    }
+}
+
+fn read_small(p: &Path) -> Option<String> {
+    use std::io::Read;
+    let f = std::fs::File::open(p).ok()?;
+    let mut s = String::new();
+    f.take(4096).read_to_string(&mut s).ok()?;
+    Some(s)
+}
+
+const GIT_DIR_FILES: &[&str] = &[
+    "HEAD",
+    "config",
+    "index",
+    "commondir",
+    "gitdir",
+    "packed-refs",
+    "ORIG_HEAD",
+    "FETCH_HEAD",
+    "MERGE_HEAD",
+    "shallow",
+    "info/exclude",
+    "info/attributes",
+    "info/grafts",
+    "objects/info/alternates",
+];
+
+fn git_dir_ok(g: &Path) -> bool {
+    if !GIT_DIR_FILES.iter().all(|f| file_ok(&g.join(f))) {
+        return false;
+    }
+    let common = match read_small(&g.join("commondir")) {
+        Some(c) => {
+            let c = Path::new(c.trim());
+            if c.is_absolute() {
+                c.to_path_buf()
+            } else {
+                g.join(c)
+            }
+        }
+        None => g.to_path_buf(),
+    };
+    if common != g && !GIT_DIR_FILES.iter().all(|f| file_ok(&common.join(f))) {
+        return false;
+    }
+    // The branch HEAD points at.
+    if let Some(head) = read_small(&g.join("HEAD"))
+        && let Some(target) = head.trim().strip_prefix("ref: ")
+    {
+        if target.contains("..") {
+            return false;
+        }
+        return file_ok(&g.join(target)) && file_ok(&common.join(target));
+    }
+    true
+}
+
+/// Checks the git metadata libgit2 will read for the repo at (or, with `search`, above)
+/// `path`. A downloaded repo could ship `.git/index` or `.git/HEAD` as a FIFO, which
+/// would otherwise hang the service.
+pub fn metadata_is_safe(path: &Path, search: bool) -> bool {
+    let mut dir = Some(path);
+    while let Some(d) = dir {
+        let dotgit = d.join(".git");
+        if let Ok(m) = std::fs::metadata(&dotgit) {
+            if m.is_dir() {
+                return git_dir_ok(&dotgit)
+                    && file_ok(&d.join(".gitattributes"))
+                    && file_ok(&d.join(".gitignore"));
+            }
+            if !m.is_file() {
+                return false;
+            }
+            // A linked worktree: `.git` is a file naming the real git folder.
+            let Some(text) = read_small(&dotgit) else {
+                return false;
+            };
+            let Some(target) = text.trim().strip_prefix("gitdir: ") else {
+                return false;
+            };
+            let target = Path::new(target);
+            let g = if target.is_absolute() {
+                target.to_path_buf()
+            } else {
+                d.join(target)
+            };
+            return git_dir_ok(&g)
+                && file_ok(&d.join(".gitattributes"))
+                && file_ok(&d.join(".gitignore"));
+        }
+        if std::fs::symlink_metadata(&dotgit).is_ok() {
+            return false; // a dangling or looping symlink
+        }
+        // A bare repo, or a git folder itself.
+        if d.join("objects").is_dir() && std::fs::symlink_metadata(d.join("HEAD")).is_ok() {
+            return git_dir_ok(d);
+        }
+        if !search {
+            return true;
+        }
+        dir = d.parent();
+    }
+    true
 }
 
 /// The main checkout of a repo, from its common git folder.
@@ -456,6 +575,59 @@ mod tests {
             Some(Count::Many),
             "a zero budget is always exceeded"
         );
+    }
+
+    fn mkfifo(p: &Path) {
+        let c = std::ffi::CString::new(p.to_str().unwrap()).unwrap();
+        assert_eq!(unsafe { libc::mkfifo(c.as_ptr(), 0o600) }, 0);
+    }
+
+    #[test]
+    fn repos_with_fifos_in_their_git_files_are_refused_without_blocking() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = canon(dir.path()).join("shop");
+        init(&root);
+        assert!(metadata_is_safe(&root, false));
+
+        std::fs::remove_file(root.join(".git/index")).unwrap();
+        mkfifo(&root.join(".git/index"));
+        assert!(!metadata_is_safe(&root, false));
+        assert!(!metadata_is_safe(&root.join("src/deep"), true));
+        let mut loc = Locator::default();
+        assert_eq!(loc.locate(&root.join("README.md")), None);
+        assert_eq!(head_of(&root), None);
+        assert_eq!(uncommitted(&root, Duration::from_secs(1)), None);
+    }
+
+    #[test]
+    fn a_fifo_branch_ref_or_ignore_file_is_refused() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = canon(dir.path()).join("shop");
+        init(&root);
+        let head_ref = root.join(".git/refs/heads/main");
+        std::fs::remove_file(&head_ref).unwrap();
+        mkfifo(&head_ref);
+        assert!(!metadata_is_safe(&root, false));
+
+        let other = canon(dir.path()).join("other");
+        init(&other);
+        mkfifo(&other.join(".gitignore"));
+        assert!(!metadata_is_safe(&other, false));
+    }
+
+    #[test]
+    fn linked_worktrees_are_checked_through_their_gitdir_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = canon(dir.path()).join("shop");
+        let repo = init(&root);
+        let wt = root.join(".claude/worktrees/x");
+        std::fs::create_dir_all(wt.parent().unwrap()).unwrap();
+        add_worktree(&repo, "x", &wt, "feat/x");
+        assert!(metadata_is_safe(&wt, false));
+        let index = root.join(".git/worktrees/x/index");
+        let _ = std::fs::remove_file(&index);
+        mkfifo(&index);
+        assert!(!metadata_is_safe(&wt, false));
     }
 
     #[test]
