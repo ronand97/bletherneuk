@@ -9,7 +9,7 @@ pub const DANGEROUS_EXTENSIONS: &[&str] = &[
     "command", "terminal", "tool", "app", "pkg", "fileloc", "webloc", "jar", "py", "sh",
 ];
 
-#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize, Default)]
 #[serde(default, deny_unknown_fields)]
 pub struct Config {
     pub tickets: Tickets,
@@ -79,21 +79,6 @@ pub struct KeepAwake {
 #[serde(default, deny_unknown_fields)]
 pub struct Worktrees {
     pub status_interval_seconds: u64,
-}
-
-impl Default for Config {
-    fn default() -> Self {
-        Config {
-            tickets: Tickets::default(),
-            chats: Chats::default(),
-            outputs: Outputs::default(),
-            snapshots: Snapshots::default(),
-            archive: Archive::default(),
-            github: Github::default(),
-            keep_awake: KeepAwake::default(),
-            worktrees: Worktrees::default(),
-        }
-    }
 }
 
 impl Default for Chats {
@@ -253,7 +238,7 @@ impl Config {
 
     pub fn is_output_extension(&self, ext: &str) -> bool {
         let ext = ext.to_ascii_lowercase();
-        self.outputs.extensions.iter().any(|e| *e == ext)
+        self.outputs.extensions.contains(&ext)
     }
 }
 
