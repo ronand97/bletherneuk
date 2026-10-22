@@ -394,7 +394,10 @@ pub async fn poll_repo(app: &Shared, github: &str) -> Result<(), String> {
 async fn gh_loop(app: Shared) {
     // Per repo: consecutive failures, and when to try next.
     let mut backoff: HashMap<String, (u32, i64)> = HashMap::new();
+    // Checks every minute, so repos found by a new chat are polled without waiting.
+    let mut tick = tokio::time::interval(Duration::from_secs(60));
     loop {
+        tick.tick().await;
         let repos: Vec<String> = {
             let db = app.db.lock().expect("db lock");
             db.conn()
@@ -402,9 +405,22 @@ async fn gh_loop(app: Shared) {
                 .and_then(|mut s| s.query_map([], |r| r.get(0)).map(|r| r.flatten().collect()))
                 .unwrap_or_default()
         };
+        let every = app.config().github.poll_minutes.max(1) as i64 * 60_000;
         let now = now_ms();
         for repo in repos {
             if backoff.get(&repo).is_some_and(|(_, next)| *next > now) {
+                continue;
+            }
+            let last: i64 = app
+                .db
+                .lock()
+                .expect("db lock")
+                .meta(&format!("gh.last.{repo}"))
+                .ok()
+                .flatten()
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(0);
+            if now - last < every {
                 continue;
             }
             match poll_repo(&app, &repo).await {
@@ -419,8 +435,6 @@ async fn gh_loop(app: Shared) {
                 }
             }
         }
-        let minutes = app.config().github.poll_minutes.max(1);
-        tokio::time::sleep(Duration::from_secs(minutes * 60)).await;
     }
 }
 
