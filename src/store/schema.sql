@@ -24,8 +24,9 @@ CREATE TABLE chats (
     recorded_branch TEXT,
     start_cwd       TEXT,
     last_cwd        TEXT,
-    repo_root       TEXT,
-    worktree_path   TEXT,
+    repo_root       TEXT,                  -- repo of the folder the chat started in
+    start_worktree  TEXT,                  -- worktree of the folder the chat started in
+    worktree_path   TEXT,                  -- worktree of the chat's most recent folder
     first_activity  INTEGER,
     last_activity   INTEGER,
     status          TEXT NOT NULL DEFAULT 'idle',  -- idle | working | needs_you | done | closed
@@ -55,6 +56,17 @@ CREATE TABLE chat_writes (
     count   INTEGER NOT NULL,
     last_at INTEGER,
     PRIMARY KEY (chat_id, path)
+);
+
+-- Worktrees a chat wrote into, with the branch each was on when first seen there.
+-- Keeping that branch means a later branch switch never moves old chats.
+CREATE TABLE chat_worktrees (
+    chat_id   TEXT NOT NULL REFERENCES chats(id) ON DELETE CASCADE,
+    worktree  TEXT NOT NULL,
+    repo_root TEXT NOT NULL,
+    branch    TEXT,
+    writes    INTEGER NOT NULL,
+    PRIMARY KEY (chat_id, worktree)
 );
 
 CREATE TABLE links (
