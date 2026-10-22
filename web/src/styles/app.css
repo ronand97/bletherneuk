@@ -1,0 +1,588 @@
+/*
+ * bletherneuk pages. Every colour, font and size comes from the theme's CSS custom
+ * properties, which the service sets on <html> through the CSSOM (design section 15).
+ * The values below are only defaults until the theme arrives: soft-dark, or soft-light
+ * when the system is in light mode.
+ */
+
+:root {
+  --background: #24273a;
+  --surface: #1e2030;
+  --text: #cad3f5;
+  --muted: #8087a2;
+  --border: #363a4f;
+  --accent: #8aadf4;
+  --needs-you: #ed8796;
+  --working: #eed49f;
+  --done: #a6da95;
+  --idle: #8087a2;
+  --diff-added-bg: #a6da9526;
+  --diff-removed-bg: #ed879626;
+  --ansi-0: #494d64;
+  --ansi-1: #ed8796;
+  --ansi-2: #a6da95;
+  --ansi-3: #eed49f;
+  --ansi-4: #8aadf4;
+  --ansi-5: #f5bde6;
+  --ansi-6: #8bd5ca;
+  --ansi-7: #b8c0e0;
+  --ansi-8: #5b6078;
+  --ansi-9: #ed8796;
+  --ansi-10: #a6da95;
+  --ansi-11: #eed49f;
+  --ansi-12: #8aadf4;
+  --ansi-13: #f5bde6;
+  --ansi-14: #8bd5ca;
+  --ansi-15: #a5adcb;
+  --font-ui: -apple-system, BlinkMacSystemFont, 'Inter', 'Helvetica Neue', sans-serif;
+  --font-code: 'JetBrains Mono', 'SF Mono', ui-monospace, Menlo, monospace;
+  --font-size: 13px;
+  --line-height: 1.5;
+  --radius: 6px;
+  --pad: 10px;
+  --gap: 8px;
+
+  /* Syntax colours. A theme may set these; otherwise they follow the ANSI palette. */
+  --shiki-foreground: var(--text);
+  --shiki-background: transparent;
+  --shiki-token-constant: var(--ansi-3);
+  --shiki-token-string: var(--ansi-2);
+  --shiki-token-comment: var(--muted);
+  --shiki-token-keyword: var(--ansi-5);
+  --shiki-token-parameter: var(--text);
+  --shiki-token-function: var(--ansi-4);
+  --shiki-token-string-expression: var(--ansi-2);
+  --shiki-token-punctuation: var(--ansi-7);
+  --shiki-token-link: var(--accent);
+
+  /* Derived from the theme. Nothing here is a fixed colour. */
+  --hover: color-mix(in srgb, var(--text) 7%, transparent);
+  --pressed: color-mix(in srgb, var(--text) 12%, transparent);
+  --selected: color-mix(in srgb, var(--accent) 16%, transparent);
+  --line-soft: color-mix(in srgb, var(--border) 65%, transparent);
+  --raised: color-mix(in srgb, var(--surface) 88%, var(--text));
+  --pad-s: calc(var(--pad) * 0.5);
+  --pad-xs: calc(var(--pad) * 0.3);
+  --gap-s: calc(var(--gap) * 0.5);
+
+  color-scheme: dark;
+}
+
+@media (prefers-color-scheme: light) {
+  :root {
+    --background: #eff1f5;
+    --surface: #e6e9ef;
+    --text: #4c4f69;
+    --muted: #6c6f85;
+    --border: #ccd0da;
+    --accent: #1e66f5;
+    --needs-you: #d20f39;
+    --working: #df8e1d;
+    --done: #40a02b;
+    --idle: #8c8fa1;
+    --diff-added-bg: #40a02b1f;
+    --diff-removed-bg: #d20f391a;
+    --ansi-0: #5c5f77;
+    --ansi-1: #d20f39;
+    --ansi-2: #40a02b;
+    --ansi-3: #df8e1d;
+    --ansi-4: #1e66f5;
+    --ansi-5: #8839ef;
+    --ansi-6: #179299;
+    --ansi-7: #6c6f85;
+    --ansi-8: #6c6f85;
+    --ansi-9: #d20f39;
+    --ansi-10: #40a02b;
+    --ansi-11: #df8e1d;
+    --ansi-12: #1e66f5;
+    --ansi-13: #8839ef;
+    --ansi-14: #179299;
+    --ansi-15: #bcc0cc;
+    --raised: color-mix(in srgb, var(--surface) 70%, white);
+    color-scheme: light;
+  }
+}
+
+:root[data-scheme='light'] {
+  color-scheme: light;
+  --raised: color-mix(in srgb, var(--surface) 70%, white);
+}
+
+:root[data-scheme='dark'] {
+  color-scheme: dark;
+  --raised: color-mix(in srgb, var(--surface) 88%, var(--text));
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  background: var(--background);
+  color: var(--text);
+  font-family: var(--font-ui), system-ui, sans-serif;
+  font-size: var(--font-size);
+  line-height: var(--line-height);
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+h1,
+h2,
+h3,
+p,
+ul,
+ol {
+  margin: 0;
+  padding: 0;
+}
+
+ul,
+ol {
+  list-style: none;
+}
+
+button,
+input,
+select,
+textarea {
+  font: inherit;
+  color: inherit;
+}
+
+a {
+  color: var(--accent);
+  text-decoration: none;
+}
+
+a:hover {
+  text-decoration: underline;
+}
+
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+  border-radius: calc(var(--radius) * 0.6);
+}
+
+::selection {
+  background: color-mix(in srgb, var(--accent) 35%, transparent);
+}
+
+/* Text helpers ---------------------------------------------------------- */
+
+.muted {
+  color: var(--muted);
+}
+
+.mono {
+  font-family: var(--font-code), ui-monospace, Menlo, monospace;
+  font-size: 0.92em;
+}
+
+.small {
+  font-size: 0.88em;
+}
+
+.tiny {
+  font-size: 0.8em;
+}
+
+.ellipsis {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+/*
+ * "a · b · c" that wraps cleanly. Every item starts with a separator; the list is pulled
+ * left by one separator's width and clipped there, so the separator that begins each
+ * line (including the first) is hidden. The width is a registered <length>, so it is
+ * resolved once on the list and items in a smaller font still line up with the clip.
+ */
+@property --sep-width {
+  syntax: '<length>';
+  inherits: true;
+  initial-value: 0px;
+}
+
+.sep-list {
+  --sep-width: 1.1em;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  min-width: 0;
+  margin-left: calc(-1 * var(--sep-width));
+  clip-path: inset(-0.5em -100vw -0.5em var(--sep-width));
+}
+
+.sep-list > *::before {
+  content: '·';
+  display: inline-block;
+  width: var(--sep-width);
+  text-align: center;
+  color: var(--muted);
+  opacity: 0.7;
+}
+
+.add {
+  color: var(--done);
+}
+
+.del {
+  color: var(--needs-you);
+}
+
+/* Buttons ---------------------------------------------------------------- */
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.4em;
+  padding: var(--pad-xs) calc(var(--pad) * 0.8);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  color: var(--text);
+  line-height: 1.35;
+  cursor: pointer;
+  white-space: nowrap;
+  transition:
+    background-color 0.12s ease,
+    border-color 0.12s ease;
+}
+
+.btn:hover {
+  background: var(--raised);
+  border-color: color-mix(in srgb, var(--border) 60%, var(--text));
+}
+
+.btn:active {
+  background: var(--pressed);
+}
+
+.btn.primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--background);
+  font-weight: 600;
+}
+
+.btn.primary:hover {
+  background: color-mix(in srgb, var(--accent) 88%, var(--text));
+}
+
+.btn.ghost {
+  background: transparent;
+  border-color: transparent;
+  color: var(--muted);
+}
+
+.btn.ghost:hover {
+  background: var(--hover);
+  color: var(--text);
+}
+
+.btn.small {
+  padding: 0.05em 0.55em;
+  font-size: 0.88em;
+}
+
+.btn.icon {
+  padding: 0.2em;
+  width: 1.9em;
+  height: 1.9em;
+  flex: none;
+}
+
+.btn[aria-pressed='true'] {
+  background: var(--selected);
+  border-color: color-mix(in srgb, var(--accent) 55%, transparent);
+  color: var(--text);
+}
+
+.btn[aria-disabled='true'],
+.btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.btn[aria-disabled='true']:hover,
+.btn:disabled:hover {
+  background: var(--surface);
+  border-color: var(--border);
+}
+
+.btn.ghost[aria-disabled='true']:hover,
+.btn.ghost:disabled:hover {
+  background: transparent;
+  border-color: transparent;
+}
+
+/* A button that looks like plain text, for rows whose title opens something. */
+.text-btn {
+  display: block;
+  width: 100%;
+  min-width: 0;
+  padding: 0;
+  margin: 0;
+  border: 0;
+  background: none;
+  text-align: left;
+  cursor: pointer;
+  color: inherit;
+}
+
+.text-btn[aria-disabled='true'] {
+  cursor: not-allowed;
+}
+
+/* Form controls ---------------------------------------------------------- */
+
+.input,
+.select {
+  min-width: 0;
+  padding: var(--pad-xs) calc(var(--pad) * 0.6);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--background);
+  color: var(--text);
+  line-height: 1.35;
+}
+
+.input::placeholder {
+  color: var(--muted);
+  opacity: 0.85;
+}
+
+.input:focus,
+.select:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 30%, transparent);
+}
+
+.input[aria-invalid='true'] {
+  border-color: var(--needs-you);
+}
+
+.select {
+  cursor: pointer;
+}
+
+.select.ghost {
+  border-color: transparent;
+  background: transparent;
+  color: var(--muted);
+  padding-left: 0.4em;
+  padding-right: 0.4em;
+}
+
+.select.ghost:hover {
+  background: var(--hover);
+  color: var(--text);
+}
+
+/* Chips and status ------------------------------------------------------- */
+
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35em;
+  max-width: 100%;
+  padding: 0 0.5em;
+  border: 1px solid var(--line-soft);
+  border-radius: 999px;
+  color: var(--muted);
+  font-size: 0.84em;
+  line-height: 1.65;
+  white-space: nowrap;
+}
+
+.chip.code {
+  font-family: var(--font-code), ui-monospace, Menlo, monospace;
+  font-size: 0.8em;
+  border-radius: calc(var(--radius) * 0.7);
+}
+
+.chip.tone-accent {
+  color: var(--accent);
+  border-color: color-mix(in srgb, var(--accent) 40%, transparent);
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+}
+
+.chip.tone-ok {
+  color: var(--done);
+  border-color: color-mix(in srgb, var(--done) 40%, transparent);
+  background: color-mix(in srgb, var(--done) 10%, transparent);
+}
+
+.chip.tone-warn {
+  color: var(--working);
+  border-color: color-mix(in srgb, var(--working) 40%, transparent);
+  background: color-mix(in srgb, var(--working) 10%, transparent);
+}
+
+.chip.tone-bad {
+  color: var(--needs-you);
+  border-color: color-mix(in srgb, var(--needs-you) 40%, transparent);
+  background: color-mix(in srgb, var(--needs-you) 10%, transparent);
+}
+
+.dot {
+  display: inline-block;
+  flex: none;
+  width: 0.6em;
+  height: 0.6em;
+  border-radius: 50%;
+  background: var(--idle);
+}
+
+.dot.s-needs_you {
+  background: var(--needs-you);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--needs-you) 22%, transparent);
+}
+
+.dot.s-working {
+  background: var(--working);
+  animation: bn-pulse 1.8s ease-in-out infinite;
+}
+
+.dot.s-done {
+  background: var(--done);
+}
+
+.dot.s-idle {
+  background: var(--idle);
+}
+
+.dot.s-closed {
+  background: transparent;
+  box-shadow: inset 0 0 0 1.5px var(--muted);
+}
+
+@keyframes bn-pulse {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 color-mix(in srgb, var(--working) 45%, transparent);
+  }
+  50% {
+    box-shadow: 0 0 0 4px color-mix(in srgb, var(--working) 0%, transparent);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .dot.s-working {
+    animation: none;
+  }
+  .btn {
+    transition: none;
+  }
+}
+
+/* Sections ---------------------------------------------------------------- */
+
+.section {
+  display: flex;
+  flex-direction: column;
+  gap: var(--gap-s);
+}
+
+.section-head {
+  display: flex;
+  align-items: center;
+  gap: var(--gap-s);
+  min-height: 1.9em;
+}
+
+.section-title {
+  font-size: 0.76em;
+  font-weight: 650;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.section-head .count {
+  font-size: 0.76em;
+  color: var(--muted);
+  opacity: 0.8;
+  font-variant-numeric: tabular-nums;
+}
+
+.section-head .spacer {
+  flex: 1;
+}
+
+.empty {
+  color: var(--muted);
+  font-size: 0.9em;
+  padding: var(--pad-xs) 0;
+}
+
+.error-line {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.4em;
+  color: var(--needs-you);
+  font-size: 0.88em;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+
+.note {
+  color: var(--muted);
+  font-size: 0.86em;
+  line-height: 1.45;
+}
+
+.banner {
+  display: flex;
+  align-items: center;
+  gap: var(--gap-s);
+  padding: var(--pad-s) var(--pad);
+  border: 1px solid color-mix(in srgb, var(--working) 35%, transparent);
+  border-radius: var(--radius);
+  background: color-mix(in srgb, var(--working) 9%, transparent);
+  font-size: 0.9em;
+}
+
+.banner.tone-awake {
+  border-color: color-mix(in srgb, var(--accent) 30%, transparent);
+  background: color-mix(in srgb, var(--accent) 8%, transparent);
+}
+
+.icon-inline {
+  flex: none;
+  width: 1.05em;
+  height: 1.05em;
+  vertical-align: -0.15em;
+}
+
+/* Scrollbars stay quiet. */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: color-mix(in srgb, var(--muted) 45%, transparent) transparent;
+}
