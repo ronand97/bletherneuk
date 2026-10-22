@@ -232,7 +232,10 @@ impl Locator {
             return hit.clone();
         }
         let found = locate_uncached(&dir);
-        self.cache.insert(dir, found.clone());
+        // "Not a repo" isn't cached: the folder may become one (`git init`).
+        if found.is_some() {
+            self.cache.insert(dir, found.clone());
+        }
         found
     }
 

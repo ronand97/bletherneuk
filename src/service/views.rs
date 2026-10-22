@@ -176,7 +176,7 @@ fn pr_badge(c: &Connection, keys: &[Key]) -> Value {
 const BLOCK_WORKTREES: &str = "
     FROM worktrees w
     WHERE (EXISTS (SELECT 1 FROM block_keys k
-                   WHERE k.block_id = ?1 AND k.key = 'branch:' || w.repo_root || '@' || w.branch)
+                   WHERE k.block_id = ?1 AND k.key = 'branch:' || replace(replace(w.repo_root, '%', '%25'), '@', '%40') || '@' || w.branch)
            OR w.path IN (SELECT worktree_path FROM chats WHERE block_id = ?1 AND worktree_path IS NOT NULL))";
 const BLOCK_WORKTREES_ORDER: &str = "ORDER BY w.path = w.repo_root, w.name";
 

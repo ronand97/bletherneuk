@@ -496,3 +496,24 @@ fn fork_prs_and_default_branch_heads_never_join_by_branch() {
     .unwrap();
     assert_eq!(block_count(env.store.conn()), 2);
 }
+
+#[test]
+fn sql_builds_the_same_branch_keys_as_rust() {
+    let env = Env::new();
+    let root = "/Users/x/Drive-me@example.com/50%/shop";
+    let from_sql: String = env
+        .store
+        .conn()
+        .query_row(
+            "SELECT 'branch:' || replace(replace(?1, '%', '%25'), '@', '%40') || '@' || ?2",
+            params![root, "feat/x"],
+            |r| r.get(0),
+        )
+        .unwrap();
+    let key = Key::Branch {
+        repo_root: root.into(),
+        branch: "feat/x".into(),
+    };
+    assert_eq!(from_sql, key.to_string());
+    assert_eq!(Key::parse(&from_sql), Some(key));
+}

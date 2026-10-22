@@ -98,6 +98,14 @@ async fn ingest_worker(app: Shared, mut rx: mpsc::UnboundedReceiver<PathBuf>) {
         }
         let mut seen = HashSet::new();
         batch.retain(|p| seen.insert(p.clone()));
+        // An empty path asks for a rescan: forget what was read, then read everything.
+        if batch.iter().any(|p| p.as_os_str().is_empty()) {
+            let a = app.clone();
+            let _ = tokio::task::spawn_blocking(move || reset_for_rescan(&a)).await;
+            queue_all_transcripts(&app);
+            app.changed([]);
+            continue;
+        }
         let a = app.clone();
         let touched = tokio::task::spawn_blocking(move || {
             let mut touched = BTreeSet::new();
@@ -118,6 +126,21 @@ async fn ingest_worker(app: Shared, mut rx: mpsc::UnboundedReceiver<PathBuf>) {
         }
         app.changed(touched);
     }
+}
+
+/// Forgets everything read from transcripts so they can be read again. Keeps what you
+/// entered by hand, each chat's block, status and turns, the files found (and their
+/// saved copies), and the titles of chats whose transcripts are gone.
+pub fn reset_for_rescan(app: &super::App) {
+    let db = app.db.lock().expect("db lock");
+    let _ = db.conn().execute_batch(
+        "DELETE FROM ingest_offsets;
+         DELETE FROM chat_writes;
+         DELETE FROM chat_folders;
+         UPDATE chats SET title = NULL, title_source = NULL, first_prompt = NULL,
+                          start_cwd = NULL, first_activity = NULL
+         WHERE transcript_gone = 0;",
+    );
 }
 
 /// Reads one transcript and re-places its chat. Returns the blocks that changed.
@@ -362,7 +385,7 @@ fn active_worktrees(app: &super::App) -> BTreeSet<String> {
         .prepare(
             "SELECT DISTINCT w.path FROM worktrees w
              WHERE EXISTS (SELECT 1 FROM block_keys k JOIN blocks b ON b.id = k.block_id
-                           WHERE b.archived = 0 AND k.key = 'branch:' || w.repo_root || '@' || w.branch)
+                           WHERE b.archived = 0 AND k.key = 'branch:' || replace(replace(w.repo_root, '%', '%25'), '@', '%40') || '@' || w.branch)
                 OR w.path IN (SELECT c.worktree_path FROM chats c JOIN blocks b ON b.id = c.block_id
                               WHERE b.archived = 0)",
         )
@@ -373,6 +396,8 @@ fn active_worktrees(app: &super::App) -> BTreeSet<String> {
 async fn worktree_loop(app: Shared, now: Arc<Notify>) {
     loop {
         let interval = app.config().worktrees.status_interval_seconds.max(5);
+        // Repos come and go (`git init`, a deleted clone); look them up afresh.
+        app.locator.lock().expect("locator lock").clear();
         let a = app.clone();
         let changed = tokio::task::spawn_blocking(move || {
             let active = active_worktrees(&a);
@@ -574,6 +599,7 @@ pub fn tick_keep_awake(app: &Shared, now: i64) {
 /// Marks chats closed that have been "working" for 10 minutes with no events and no
 /// iTerm2 session.
 pub fn close_stale(app: &Shared, now: i64) -> BTreeSet<i64> {
+    let bridge_up = app.bridge_connected();
     let sessions: HashSet<String> = app
         .sessions
         .lock()
@@ -598,7 +624,12 @@ pub fn close_stale(app: &Shared, now: i64) -> BTreeSet<i64> {
             status: Status::Working,
             background: false,
         };
-        let exists = session.as_ref().is_some_and(|s| sessions.contains(s));
+        // Only the bridge can say a tab is gone. With the bridge down, or a chat in
+        // another terminal, there's no way to tell, so the chat is left alone.
+        let exists = match (&session, bridge_up) {
+            (Some(s), true) => sessions.contains(s),
+            _ => true,
+        };
         if status::is_stale(state, last.unwrap_or(0), now, exists) {
             let _ = db.conn().execute(
                 "UPDATE chats SET status = 'closed', background = 0, status_since = ?2 WHERE id = ?1",

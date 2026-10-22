@@ -406,9 +406,36 @@ fn stale_working_chats_close_when_their_tab_is_gone() {
         Some(SESSION.into()),
         0,
     );
+    // With the bridge down nobody can tell whether the tab is still there.
+    tasks::close_stale(&t.app, 11 * 60_000);
+    assert_eq!(status_of(&t.app, CHAT), "working");
+
+    *t.app.bridge.lock().unwrap() = Some(bridge::fake_handle("3.7.6"));
     assert!(tasks::close_stale(&t.app, 5 * 60_000).is_empty());
+    assert_eq!(status_of(&t.app, CHAT), "working", "not stale yet");
     tasks::close_stale(&t.app, 11 * 60_000);
     assert_eq!(status_of(&t.app, CHAT), "closed");
+}
+
+#[test]
+fn a_working_chat_whose_tab_is_open_is_never_closed_as_stale() {
+    let t = test_app();
+    let root = t.work_dir().join("shop");
+    testrepo::init(&root);
+    hooks::on_hook(
+        &t.app,
+        ev("UserPromptSubmit", &root),
+        Some(SESSION.into()),
+        0,
+    );
+    *t.app.bridge.lock().unwrap() = Some(bridge::fake_handle("3.7.6"));
+    t.app
+        .sessions
+        .lock()
+        .unwrap()
+        .insert(SESSION.into(), Session::default());
+    tasks::close_stale(&t.app, 60 * 60_000);
+    assert_eq!(status_of(&t.app, CHAT), "working");
 }
 
 #[test]
@@ -620,4 +647,32 @@ fn mark_reviewed_covers_exactly_what_was_shown() {
         ))
         .is_err()
     );
+}
+
+#[test]
+fn files_a_chat_wrote_are_snapshotted_even_under_non_ascii_folders() {
+    let t = test_app();
+    let root = t.work_dir().join("café");
+    testrepo::init(&root);
+    let new = root.join("notes/plan.txt");
+    std::fs::create_dir_all(new.parent().unwrap()).unwrap();
+    std::fs::write(&new, "plan").unwrap();
+    {
+        let db = t.app.db.lock().unwrap();
+        db.conn()
+            .execute("INSERT INTO chats(id) VALUES (?1)", [CHAT])
+            .unwrap();
+        db.conn()
+            .execute(
+                "INSERT INTO chat_writes(chat_id, path, count) VALUES (?1, ?2, 1)",
+                params![CHAT, new.to_string_lossy()],
+            )
+            .unwrap();
+    }
+    let id = snapshots::take(&t.app, &root, "review", &[]).unwrap();
+    let (repo, tree) = snapshots::tree_of(&t.app, id).unwrap();
+    let shadow =
+        crate::snapshots::Shadow::open(&t.app.paths.snapshots(), Path::new(&repo)).unwrap();
+    let tree = shadow.repo.find_tree(tree).unwrap();
+    assert!(tree.get_path(Path::new("notes/plan.txt")).is_ok());
 }

@@ -126,16 +126,14 @@ fn chat_files(app: &App, worktree: &Path) -> Vec<PathBuf> {
     let db = app.db.lock().expect("db lock");
     let mut stmt = match db
         .conn()
-        .prepare("SELECT DISTINCT path FROM chat_writes WHERE substr(path, 1, ?2) = ?1")
+        .prepare("SELECT DISTINCT path FROM chat_writes WHERE substr(path, 1, length(?1)) = ?1")
     {
         Ok(s) => s,
         Err(_) => return Vec::new(),
     };
-    stmt.query_map(params![prefix, prefix.len() as i64], |r| {
-        r.get::<_, String>(0)
-    })
-    .map(|rows| rows.flatten().map(PathBuf::from).collect())
-    .unwrap_or_default()
+    stmt.query_map(params![prefix], |r| r.get::<_, String>(0))
+        .map(|rows| rows.flatten().map(PathBuf::from).collect())
+        .unwrap_or_default()
 }
 
 fn latest_tree(app: &App, worktree: &Path) -> Option<Oid> {

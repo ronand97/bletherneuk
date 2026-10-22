@@ -37,6 +37,9 @@ pub fn on_hook(app: &Shared, ev: Event, iterm_session: Option<String>, time: i64
 
     let mut jobs = Vec::new();
     let mut touched: BTreeSet<i64> = BTreeSet::new();
+    // A turn that ended: (turn, its worktree, files it wrote). Snapshots are planned
+    // after the database lock is released, since finding worktrees reads git.
+    let mut ending: Option<(i64, Option<PathBuf>, BTreeSet<PathBuf>)> = None;
     {
         let db = app.db.lock().expect("db lock");
         let c = db.conn();
@@ -166,30 +169,7 @@ pub fn on_hook(app: &Shared, ev: Event, iterm_session: Option<String>, time: i64
                         .remove(&turn)
                         .unwrap_or_default();
                     let main = wt.map(PathBuf::from).or_else(|| worktree.clone());
-                    // Other worktrees this turn wrote into get a snapshot too.
-                    let mut others: HashMap<PathBuf, Vec<PathBuf>> = HashMap::new();
-                    for p in &written {
-                        if let Some(loc) = app.locator.lock().expect("locator lock").locate(p) {
-                            others.entry(loc.worktree).or_default().push(p.clone());
-                        }
-                    }
-                    if let Some(m) = &main {
-                        let extra = others.remove(m).unwrap_or_default();
-                        jobs.push(Job {
-                            worktree: m.clone(),
-                            reason: "turn_end",
-                            turn: Some((turn, Edge::End)),
-                            extra,
-                        });
-                    }
-                    for (w, extra) in others {
-                        jobs.push(Job {
-                            worktree: w,
-                            reason: "turn_end",
-                            turn: None,
-                            extra,
-                        });
-                    }
+                    ending = Some((turn, main, written));
                 }
             }
             TurnEdge::None => {}
@@ -203,6 +183,32 @@ pub fn on_hook(app: &Shared, ev: Event, iterm_session: Option<String>, time: i64
         touched.extend(block);
     }
 
+    if let Some((turn, main, written)) = ending {
+        // Other worktrees this turn wrote into get a snapshot too.
+        let mut others: HashMap<PathBuf, Vec<PathBuf>> = HashMap::new();
+        for p in &written {
+            if let Some(loc) = app.locator.lock().expect("locator lock").locate(p) {
+                others.entry(loc.worktree).or_default().push(p.clone());
+            }
+        }
+        if let Some(m) = &main {
+            let extra = others.remove(m).unwrap_or_default();
+            jobs.push(Job {
+                worktree: m.clone(),
+                reason: "turn_end",
+                turn: Some((turn, Edge::End)),
+                extra,
+            });
+        }
+        for (w, extra) in others {
+            jobs.push(Job {
+                worktree: w,
+                reason: "turn_end",
+                turn: None,
+                extra,
+            });
+        }
+    }
     for job in jobs {
         let _ = app.snap_tx.send(job);
     }

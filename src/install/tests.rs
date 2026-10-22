@@ -238,3 +238,25 @@ fn a_concurrent_change_is_kept() {
     let v: Value = serde_json::from_str(&std::fs::read_to_string(&settings).unwrap()).unwrap();
     assert_eq!(v, json!({"a": 1, "b": 2, "ours": true}));
 }
+
+#[test]
+fn a_symlinked_settings_file_stays_a_symlink() {
+    let (dir, paths) = setup();
+    let real = dir
+        .path()
+        .canonicalize()
+        .unwrap()
+        .join("dotfiles/claude-settings.json");
+    std::fs::create_dir_all(real.parent().unwrap()).unwrap();
+    std::fs::write(&real, "{\"a\": 1}").unwrap();
+    std::os::unix::fs::symlink(&real, paths.claude_settings()).unwrap();
+    let l = FakeLaunchctl::default();
+    installer(&paths, &l, false)
+        .install(&mut Vec::new(), NOW)
+        .unwrap();
+    let meta = std::fs::symlink_metadata(paths.claude_settings()).unwrap();
+    assert!(meta.file_type().is_symlink());
+    let v: Value = serde_json::from_str(&std::fs::read_to_string(&real).unwrap()).unwrap();
+    assert_eq!(v["a"], 1);
+    assert!(v["hooks"]["Stop"].is_array());
+}

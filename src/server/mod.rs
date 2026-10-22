@@ -235,7 +235,15 @@ async fn auth(
             .unwrap_or_else(|| "/".into());
         return Html(hop(&next)).into_response();
     }
-    bridge::panel_needs_auth(&app);
+    // The toolbelt loads its URL directly (no Fetch Metadata, or "none"). Other sites
+    // may reach /auth, but mustn't be able to make the panel reload.
+    let direct = matches!(
+        headers.get("sec-fetch-site").and_then(|v| v.to_str().ok()),
+        None | Some("none")
+    );
+    if direct {
+        bridge::panel_needs_auth(&app);
+    }
     connecting()
 }
 

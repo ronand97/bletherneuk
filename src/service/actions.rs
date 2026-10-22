@@ -8,8 +8,8 @@ use regex::Regex;
 use rusqlite::{OptionalExtension, params};
 use serde_json::{Value, json};
 
+use super::Shared;
 use super::bridge::{self, BridgeError};
-use super::{Shared, UiEvent};
 use crate::awake::Request;
 use crate::util::now_ms;
 
@@ -746,25 +746,10 @@ pub async fn live_check(app: &Shared) -> Outcome {
 }
 
 pub fn rescan(app: &Shared) -> Outcome {
-    {
-        let db = app.db.lock().expect("db lock");
-        // Forget what was read, but keep everything entered by hand and every chat's
-        // block, status and turns.
-        db.conn()
-            .execute_batch(
-                "DELETE FROM ingest_offsets;
-                 DELETE FROM chat_writes;
-                 DELETE FROM chat_folders;
-                 DELETE FROM files WHERE chat_id IS NOT NULL;
-                 UPDATE chats SET title = NULL, title_source = NULL, first_prompt = NULL,
-                                  start_cwd = NULL, first_activity = NULL;",
-            )
-            .map_err(|e| e.to_string())?;
-    }
-    super::tasks::queue_all_transcripts(app);
-    app.emit(UiEvent::Changed {
-        blocks: Vec::new(),
-        board: true,
-    });
+    // The ingest worker does the reset itself, between batches, so a read in progress
+    // can't save an old offset over it.
+    app.ingest_tx
+        .send(PathBuf::new())
+        .map_err(|_| "the service is shutting down".to_string())?;
     ok()
 }

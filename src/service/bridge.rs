@@ -67,6 +67,20 @@ impl Handle {
     }
 }
 
+/// A connected-looking bridge for tests: requests go nowhere.
+#[cfg(test)]
+pub fn fake_handle(iterm_version: &str) -> Handle {
+    let (tx, rx) = mpsc::unbounded_channel();
+    std::mem::forget(rx);
+    Handle {
+        tx,
+        pending: Arc::new(Mutex::new(HashMap::new())),
+        next_id: Arc::new(AtomicU64::new(1)),
+        iterm_version: iterm_version.to_string(),
+        conn: 0,
+    }
+}
+
 /// Sends a request to the bridge and waits for its reply.
 pub async fn request(app: &Shared, mut op: Value) -> Result<Reply, BridgeError> {
     let handle = app

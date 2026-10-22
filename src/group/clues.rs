@@ -36,11 +36,10 @@ impl Key {
             return Some(Key::Ticket(t.to_string()));
         }
         if let Some(rest) = s.strip_prefix("branch:") {
-            // Branch names can't contain "@{", but may contain "@"; repo roots are absolute
-            // paths, so split at the first "@" that follows a path.
+            // The repo root has its "%" and "@" escaped, so the first "@" ends it.
             let (root, branch) = rest.split_once('@')?;
             return Some(Key::Branch {
-                repo_root: root.to_string(),
+                repo_root: unescape_root(root),
                 branch: branch.to_string(),
             });
         }
@@ -53,9 +52,21 @@ impl fmt::Display for Key {
         match self {
             Key::Pr { repo, number } => write!(f, "pr:{repo}#{number}"),
             Key::Ticket(t) => write!(f, "ticket:{t}"),
-            Key::Branch { repo_root, branch } => write!(f, "branch:{repo_root}@{branch}"),
+            Key::Branch { repo_root, branch } => {
+                write!(f, "branch:{}@{branch}", escape_root(repo_root))
+            }
         }
     }
+}
+
+/// Repo roots go into branch keys with "%" and "@" escaped, since folder names can
+/// contain "@" (cloud-drive folders often do). SQL that builds keys mirrors this.
+pub fn escape_root(root: &str) -> String {
+    root.replace('%', "%25").replace('@', "%40")
+}
+
+fn unescape_root(root: &str) -> String {
+    root.replace("%40", "@").replace("%25", "%")
 }
 
 /// A worktree a chat wrote files into.
@@ -289,6 +300,10 @@ mod tests {
             Key::Branch {
                 repo_root: "/w/shop".into(),
                 branch: "feat/a@b".into(),
+            },
+            Key::Branch {
+                repo_root: "/Users/x/Drive-me@example.com/50%/shop".into(),
+                branch: "feat/x".into(),
             },
         ] {
             assert_eq!(Key::parse(&k.to_string()), Some(k));

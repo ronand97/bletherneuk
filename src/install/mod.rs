@@ -117,10 +117,20 @@ pub fn remove_hooks(settings: &mut Value, command: &str) -> usize {
 /// re-reads just before writing in case something else changed it, and replaces the
 /// file through a rename.
 pub fn edit_settings(
-    path: &Path,
+    link: &Path,
     now_ms: i64,
     edit: impl Fn(&mut Value) -> anyhow::Result<bool>,
 ) -> anyhow::Result<Option<PathBuf>> {
+    // A settings.json that is a symlink (into a dotfiles repo, say) stays one: the edit
+    // goes to the file it points at.
+    let resolved;
+    let path = if std::fs::symlink_metadata(link).is_ok_and(|m| m.file_type().is_symlink()) {
+        resolved = std::fs::canonicalize(link)
+            .with_context(|| format!("{} points at a missing file", link.display()))?;
+        resolved.as_path()
+    } else {
+        link
+    };
     let read = || -> anyhow::Result<(Option<String>, Value)> {
         match std::fs::read_to_string(path) {
             Ok(text) => {
@@ -139,7 +149,7 @@ pub fn edit_settings(
     }
     let mut backup = None;
     if let Some(text) = &original {
-        let b = path.with_file_name(format!(
+        let b = link.with_file_name(format!(
             "settings.json.bletherneuk-backup-{}",
             chrono::DateTime::from_timestamp_millis(now_ms)
                 .unwrap_or_default()
