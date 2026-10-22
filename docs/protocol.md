@@ -84,33 +84,38 @@ The service listens on `127.0.0.1` at a random port.
 
 ### 2.1 Getting in
 
+There are no cookies. Browsers send cookies for `127.0.0.1` to every port, including servers that other accounts run, so a cookie could be replayed. Instead, the write key reaches a page only inside the HTML served for a one-time code, and the page keeps it only in memory.
+
 1. The bridge or command line asks for a page URL over the socket (`page_url` or `open_page`).
-2. The URL is `/auth?code=<code>&next=<path>`. A code works once, for 30 seconds.
-3. `/auth` sets the session cookie (`HttpOnly; SameSite=Strict; Path=/`) and answers with a tiny page that moves on to `next` with a `<meta http-equiv="refresh">`. A plain redirect would lose the cookie when the default browser arrives from the local redirect file, because browsers treat that first request as cross-site. The page never contains the code. `next` is bound to the code when it's issued; the `next` in the URL is used only in step 4.
-4. A request to `/auth` that already carries a valid session cookie is redirected to `next` whatever its code. Every toolbelt panel shares one cookie store, so panels in later windows get in this way.
-5. If a page or `/auth` is requested without a valid cookie, the service shows a "connecting" page. That page reloads itself every few seconds. At most once every 10 seconds, the service also sends the bridge a fresh `panel` URL.
+2. The URL is `/auth?code=<code>&next=<path>`. A code works for 30 seconds. Board and Changes codes work once. Panel codes work any number of times within their 30 seconds, because iTerm2 loads the panel separately in every window's toolbelt, all from the one registered URL. (iTerm2 also saves that URL in its preferences, which is why the codes expire quickly.)
+3. `/auth` with a valid code returns the page itself, with the write key inside (section 2.3). `next` is bound to the code when it's issued. The page then shows `next` in the address bar with `history.replaceState`.
+4. `/`, `/panel` and `/changes` never carry the key. Loading them, or `/auth` with a used or expired code, gives an "expired" page:
+   - for the panel, the page reloads itself every few seconds, and at most once every 10 seconds the service sends the bridge a fresh `panel` URL (only for direct loads, so other sites can't cause it);
+   - for the board and Changes page, it says to reopen them (`blether board`, or Changes from the panel).
+5. Because the key lives in page memory, reloading a page needs a fresh link. When the service restarts, every open page has expired: the panel reloads itself and gets a fresh link from the bridge; the other pages show an "expired" notice.
 
 `next` must be one of `/`, `/panel` or `/changes?block=<id>`.
 
 ### 2.2 Rules for every request
 
 - `Host` must be exactly `127.0.0.1:<port>`.
-- `Sec-Fetch-Site` must not be `cross-site` or `same-site`.
-- The session cookie is required, except for `/assets/*` and `/auth`.
-- Anything that changes state is a `POST` with a JSON body. It must have an exact `Origin: http://127.0.0.1:<port>` and the write key in `X-Bletherneuk-Key`.
+- `Sec-Fetch-Site` must not be `cross-site` or `same-site` (except on `/auth`, which the default browser reaches from a local file and whose code is the credential).
+- Every `/api/` request, reads included, must carry the write key in an `X-Bletherneuk-Key` header.
+- Anything that changes state is a `POST` with a JSON body and an exact `Origin: http://127.0.0.1:<port>`.
 - No CORS headers are ever sent. `OPTIONS` requests are refused.
 - Responses carry `Content-Security-Policy: default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'`, `X-Content-Type-Options: nosniff`, `Referrer-Policy: no-referrer` and `X-Frame-Options: DENY`. HTML and API responses also carry `Cache-Control: no-store`.
 
 ### 2.3 Pages
 
-`GET /`, `GET /panel` and `GET /changes?block=<id>` all return the same HTML page. The service adds two `<meta>` tags to its `<head>`:
+`/auth?code=…` returns the app's HTML page with three `<meta>` tags added to its `<head>`:
 
 ```html
 <meta name="bn-page" content="board|panel|changes">
+<meta name="bn-next" content="/ | /panel | /changes?block=<id>">
 <meta name="bn-key" content="<write key>">
 ```
 
-The page reads both on start, removes the `bn-key` tag, and keeps the key only in memory.
+The page reads them on start, removes the `bn-key` tag, keeps the key only in memory, and replaces the address with `bn-next`.
 
 Under the CSP, pages can't use inline scripts, inline `<style>` or `style="..."` attributes. Style changes made from script through the CSSOM (`element.style.setProperty`) are allowed. That's how the theme and Svelte's `style:` directive work.
 
@@ -186,7 +191,7 @@ Both lists are newest first.
 
 **`GET /api/theme`** returns `{"vars": {"--background": "#24273a", ...}}`. Pages set each variable on `document.documentElement` with `style.setProperty`.
 
-**`GET /api/events`** is a server-sent event stream. Events:
+**`GET /api/events`** is a server-sent event stream. Pages read it with `fetch()`, since `EventSource` can't send the key header. Events:
 
 | Event | Data |
 |---|---|
@@ -195,7 +200,7 @@ Both lists are newest first.
 | `focus` | `{"block": id or null, "chat": "<UUID>" or null}`: the focused iTerm2 tab's block and chat. |
 | `bridge` | `{"connected": bool}` |
 
-The stream sends a comment every 20 seconds to keep the connection open. On disconnect, pages show a "reconnecting" overlay and reconnect with backoff.
+The stream sends a comment every 20 seconds to keep the connection open. On disconnect, pages show a "reconnecting" overlay and reconnect with backoff. A `401` means the page has expired (section 2.1).
 
 ### 2.5 Actions (POST, JSON)
 

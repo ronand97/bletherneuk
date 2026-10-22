@@ -1,10 +1,12 @@
-// Reads the two <meta> tags the service adds to the page (docs/protocol.md section 2.3).
+// Reads the <meta> tags the service adds to the page (docs/protocol.md section 2.3).
 
 import type { BlockId, PageKind } from './types';
 
 export interface Boot {
   page: PageKind;
   key: string | null;
+  /** The clean path to show in the address bar (the page opens at /auth?code=…). */
+  next: string | null;
 }
 
 interface MetaLike {
@@ -28,9 +30,21 @@ interface LocationLike {
 export function readBoot(doc: DocLike, location: LocationLike): Boot {
   const pageMeta = doc.querySelector('meta[name="bn-page"]');
   const keyMeta = doc.querySelector('meta[name="bn-key"]');
+  const nextMeta = doc.querySelector('meta[name="bn-next"]');
   const key = keyMeta?.getAttribute('content') ?? null;
   keyMeta?.remove();
-  return { page: parsePage(pageMeta?.getAttribute('content') ?? null, location.pathname), key };
+  return {
+    page: parsePage(pageMeta?.getAttribute('content') ?? null, location.pathname),
+    key,
+    next: parseNext(nextMeta?.getAttribute('content') ?? null),
+  };
+}
+
+/** Only the service's own page paths: `/`, `/panel` or `/changes?block=<id>`. */
+export function parseNext(next: string | null): string | null {
+  if (next === '/' || next === '/panel') return next;
+  if (next !== null && /^\/changes\?block=[0-9]{1,15}$/.test(next)) return next;
+  return null;
 }
 
 export function parsePage(meta: string | null, pathname: string): PageKind {

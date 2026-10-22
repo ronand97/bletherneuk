@@ -89,18 +89,19 @@ pub struct Focus {
 pub struct Code {
     pub expires: Instant,
     pub next: String,
+    /// Panel codes work any number of times until they expire: iTerm2 loads the panel
+    /// separately in every window's toolbelt, all from the one registered URL.
+    pub reusable: bool,
 }
 
 /// Secrets created fresh on every start (design §20.2).
 pub struct Secrets {
-    pub session: String,
     pub write_key: String,
 }
 
 impl Secrets {
     pub fn fresh() -> Secrets {
         Secrets {
-            session: random_hex(32),
             write_key: random_hex(32),
         }
     }
@@ -281,7 +282,8 @@ impl App {
         self.bridge.lock().expect("bridge lock").is_some()
     }
 
-    /// A one-time page URL (design §20.2): the code works once, for 30 seconds.
+    /// A one-time page URL (design §20.2): the code works once, for 30 seconds. Panel
+    /// codes work for every toolbelt during those 30 seconds.
     pub fn page_url(&self, next: &str) -> String {
         let code = random_hex(24);
         let mut codes = self.codes.lock().expect("codes lock");
@@ -292,17 +294,27 @@ impl App {
             Code {
                 expires: now + std::time::Duration::from_secs(30),
                 next: next.to_string(),
+                reusable: next == "/panel",
             },
         );
         let next_enc: String = url::form_urlencoded::byte_serialize(next.as_bytes()).collect();
         format!("{}/auth?code={code}&next={next_enc}", self.origin())
     }
 
-    /// Uses up a code, returning where it leads.
+    /// Uses up a code (panel codes stay until they expire), returning where it leads.
     pub fn redeem(&self, code: &str) -> Option<String> {
         let mut codes = self.codes.lock().expect("codes lock");
-        let c = codes.remove(code)?;
-        (c.expires > Instant::now()).then_some(c.next)
+        let now = Instant::now();
+        let c = codes.get(code)?;
+        if c.expires <= now {
+            codes.remove(code);
+            return None;
+        }
+        let next = c.next.clone();
+        if !c.reusable {
+            codes.remove(code);
+        }
+        Some(next)
     }
 
     /// The page path for a page name, checked against the allowed set.

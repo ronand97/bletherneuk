@@ -14,7 +14,19 @@
   });
 </script>
 
-{#if connection.state === 'reconnecting'}
+{#if connection.state === 'expired'}
+  <div class="overlay" role="status" aria-live="polite">
+    <div class="box">
+      <div>
+        <p class="title">This page has expired</p>
+        <p class="note">
+          bletherneuk restarted, so this page can't talk to it any more. Open the board again with
+          <code>blether board</code>, or reopen Changes from the panel.
+        </p>
+      </div>
+    </div>
+  </div>
+{:else if connection.state === 'reconnecting'}
   <div class="overlay" role="status" aria-live="polite">
     <div class="box">
       <span class="spinner" aria-hidden="true"></span>

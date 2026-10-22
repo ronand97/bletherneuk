@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { apiPath, toActionResult } from './api';
-import { blockFromSearch, parsePage, readBoot } from './boot';
+import { blockFromSearch, parseNext, parsePage, readBoot } from './boot';
 import { backoffDelay } from './connection.svelte';
 import { relativeTime, shortDuration, worktreeParts } from './format';
 import { hunkSides, languageForPath } from './highlight';
@@ -59,7 +59,7 @@ describe('readBoot', () => {
 
   it('reads the page and the key, and removes the key from the DOM', () => {
     const doc = fakeDoc({ 'bn-page': 'panel', 'bn-key': 'k-123' });
-    expect(readBoot(doc, { pathname: '/', search: '' })).toEqual({ page: 'panel', key: 'k-123' });
+    expect(readBoot(doc, { pathname: '/', search: '' })).toEqual({ page: 'panel', key: 'k-123', next: null });
     expect(doc.removed).toEqual(['bn-key']);
   });
 
@@ -67,6 +67,15 @@ describe('readBoot', () => {
     expect(parsePage(null, '/changes')).toBe('changes');
     expect(parsePage('<img>', '/panel')).toBe('panel');
     expect(parsePage(null, '/')).toBe('board');
+  });
+
+  it('accepts only the service\'s own page paths as the clean path', () => {
+    expect(parseNext('/')).toBe('/');
+    expect(parseNext('/panel')).toBe('/panel');
+    expect(parseNext('/changes?block=12')).toBe('/changes?block=12');
+    for (const bad of ['//evil.example/', 'https://evil.example/', '/changes?block=1&x=2', '/api/board', null]) {
+      expect(parseNext(bad)).toBeNull();
+    }
   });
 
   it('reads a positive integer block ID only', () => {

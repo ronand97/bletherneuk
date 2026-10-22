@@ -22,6 +22,8 @@ window.addEventListener('unhandledrejection', (ev) => ev.preventDefault());
 
 const boot = readBoot(document, location);
 setWriteKey(boot.key);
+// The page arrives at /auth?code=…; show its clean path (the code is already used up).
+if (boot.next) history.replaceState(null, '', boot.next);
 
 void getJSON<ThemeResponse>('/api/theme')
   .then((theme) => applyTheme(theme.vars))
@@ -32,6 +34,7 @@ connection.on('reopen', () => {
     .then((theme) => applyTheme(theme.vars))
     .catch(() => undefined);
 });
+connection.reloadWhenExpired = boot.page === 'panel';
 connection.start();
 clock.start();
 

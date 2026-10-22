@@ -22,10 +22,15 @@ export function apiPath(...parts: (string | number)[]): string {
   return '/api/' + parts.map((p) => encodeURIComponent(String(p))).join('/');
 }
 
+/** Headers for every request: the write key goes in a header, never a cookie. */
+export function authHeaders(extra: Record<string, string> = {}): Record<string, string> {
+  return writeKey ? { ...extra, 'X-Bletherneuk-Key': writeKey } : { ...extra };
+}
+
 export async function getJSON<T>(path: string, signal?: AbortSignal): Promise<T> {
   const res = await fetch(path, {
-    headers: { Accept: 'application/json' },
-    credentials: 'same-origin',
+    headers: authHeaders({ Accept: 'application/json' }),
+    credentials: 'omit',
     cache: 'no-store',
     signal,
   });
@@ -44,7 +49,7 @@ export async function post(path: string, body: unknown = {}): Promise<ActionResu
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'X-Bletherneuk-Key': writeKey },
       body: JSON.stringify(body),
-      credentials: 'same-origin',
+      credentials: 'omit',
       cache: 'no-store',
     });
   } catch {
@@ -73,7 +78,7 @@ export function toActionResult(data: unknown, status: number): ActionResult {
 export function describeLoadError(err: unknown): string {
   if (err instanceof ApiError) {
     if (err.status === 404) return 'Not found. It may have been merged into another block.';
-    if (err.status === 401 || err.status === 403) return 'This page’s session has ended. Reopen it from bletherneuk.';
+    if (err.status === 401 || err.status === 403) return 'This page has expired. Reopen it from bletherneuk.';
     return `bletherneuk answered with an error (HTTP ${err.status}).`;
   }
   return 'Could not reach bletherneuk.';

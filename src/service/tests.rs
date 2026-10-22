@@ -441,30 +441,30 @@ fn a_working_chat_whose_tab_is_open_is_never_closed_as_stale() {
 #[test]
 fn page_codes_work_once_and_expire() {
     let t = test_app();
-    let url = t.app.page_url("/panel");
-    let code = url
-        .split("code=")
-        .nth(1)
-        .unwrap()
-        .split('&')
-        .next()
-        .unwrap()
-        .to_string();
-    assert_eq!(t.app.redeem(&code).as_deref(), Some("/panel"));
+    let code_of = |url: &str| {
+        url.split("code=")
+            .nth(1)
+            .unwrap()
+            .split('&')
+            .next()
+            .unwrap()
+            .to_string()
+    };
+    let code = code_of(&t.app.page_url("/"));
+    assert_eq!(t.app.redeem(&code).as_deref(), Some("/"));
     assert_eq!(t.app.redeem(&code), None, "a code works once");
 
-    let url = t.app.page_url("/");
-    let code = url
-        .split("code=")
-        .nth(1)
-        .unwrap()
-        .split('&')
-        .next()
-        .unwrap()
-        .to_string();
-    t.app.codes.lock().unwrap().get_mut(&code).unwrap().expires =
-        std::time::Instant::now() - std::time::Duration::from_secs(1);
-    assert_eq!(t.app.redeem(&code), None, "an expired code doesn't work");
+    // Every window's toolbelt loads the one panel URL, so panel codes can be reused.
+    let panel = code_of(&t.app.page_url("/panel"));
+    assert_eq!(t.app.redeem(&panel).as_deref(), Some("/panel"));
+    assert_eq!(t.app.redeem(&panel).as_deref(), Some("/panel"));
+
+    for code in [code_of(&t.app.page_url("/")), panel] {
+        if let Some(c) = t.app.codes.lock().unwrap().get_mut(&code) {
+            c.expires = std::time::Instant::now() - std::time::Duration::from_secs(1);
+        }
+        assert_eq!(t.app.redeem(&code), None, "an expired code doesn't work");
+    }
 }
 
 #[test]

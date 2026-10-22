@@ -66,28 +66,28 @@ pub fn router(app: Shared) -> Router {
         .with_state(app)
 }
 
-fn cookie_name(app: &Shared) -> String {
-    format!("bn_{}", app.port())
-}
-
 /// Compares secrets without leaking where they differ through timing.
 fn same_secret(a: &[u8], b: &[u8]) -> bool {
     a.len() == b.len() && a.iter().zip(b).fold(0u8, |acc, (x, y)| acc | (x ^ y)) == 0
 }
 
-fn has_session(app: &Shared, headers: &HeaderMap) -> bool {
-    let name = cookie_name(app);
+/// Pages send the write key in a header on every API request. A page gets the key only
+/// inside the HTML served for a one-time code, and keeps it only in memory, so a browser
+/// never sends it anywhere by itself. (A cookie would be: browsers send cookies for
+/// 127.0.0.1 to every port, including servers run by other accounts.)
+fn has_key(app: &Shared, headers: &HeaderMap) -> bool {
     headers
-        .get_all(header::COOKIE)
-        .iter()
-        .filter_map(|v| v.to_str().ok())
-        .flat_map(|v| v.split(';'))
-        .filter_map(|kv| kv.trim().split_once('='))
-        .any(|(k, v)| k == name && same_secret(v.as_bytes(), app.secrets.session.as_bytes()))
+        .get("x-bletherneuk-key")
+        .is_some_and(|k| same_secret(k.as_bytes(), app.secrets.write_key.as_bytes()))
 }
 
-fn is_page(path: &str) -> bool {
-    matches!(path, "/" | "/panel" | "/changes" | "/auth")
+fn fetch_site(headers: &HeaderMap) -> Option<&str> {
+    headers.get("sec-fetch-site").and_then(|v| v.to_str().ok())
+}
+
+/// A page load the browser made itself (a URL it was given), not one another site caused.
+fn direct_load(headers: &HeaderMap) -> bool {
+    matches!(fetch_site(headers), None | Some("none"))
 }
 
 fn deny(status: StatusCode, msg: &'static str) -> Response {
@@ -114,36 +114,27 @@ async fn guard(State(app): State<Shared>, req: Request, next: Next) -> Response 
             break 'check deny(StatusCode::METHOD_NOT_ALLOWED, "method not allowed");
         }
         // /auth is reached from the default browser through a local redirect file,
-        // which browsers report as cross-site. Its single-use code is the credential.
-        if path != "/auth"
-            && matches!(
-                headers.get("sec-fetch-site").and_then(|v| v.to_str().ok()),
-                Some("cross-site") | Some("same-site")
-            )
+        // which browsers report as cross-site. Its one-time code is the credential.
+        if path != "/auth" && matches!(fetch_site(&headers), Some("cross-site") | Some("same-site"))
         {
             break 'check deny(StatusCode::FORBIDDEN, "cross-site requests are refused");
         }
-        let public = path.starts_with("/assets/") || path == "/auth";
-        if !public && !has_session(&app, &headers) {
-            if is_page(&path) {
-                bridge::panel_needs_auth(&app);
-                break 'check connecting();
+        if path.starts_with("/api/") {
+            if !has_key(&app, &headers) {
+                break 'check (
+                    StatusCode::UNAUTHORIZED,
+                    Json(json!({"ok": false, "error": "this page has expired"})),
+                )
+                    .into_response();
             }
-            break 'check (
-                StatusCode::UNAUTHORIZED,
-                Json(json!({"ok": false, "error": "not signed in"})),
-            )
-                .into_response();
-        }
-        if method == Method::POST {
-            let origin_ok = headers.get(header::ORIGIN).and_then(|o| o.to_str().ok())
-                == Some(app.origin().as_str());
-            let key_ok = headers
-                .get("x-bletherneuk-key")
-                .is_some_and(|k| same_secret(k.as_bytes(), app.secrets.write_key.as_bytes()));
-            if !origin_ok || !key_ok {
+            if method == Method::POST
+                && headers.get(header::ORIGIN).and_then(|o| o.to_str().ok())
+                    != Some(app.origin().as_str())
+            {
                 break 'check deny(StatusCode::FORBIDDEN, "refused");
             }
+        } else if method == Method::POST {
+            break 'check deny(StatusCode::METHOD_NOT_ALLOWED, "method not allowed");
         }
         next.run(req).await
     };
@@ -169,38 +160,28 @@ async fn guard(State(app): State<Shared>, req: Request, next: Next) -> Response 
     resp
 }
 
-/// Shown when a page has no session yet. It reloads itself while the bridge
-/// re-registers the panel (protocol §2.1).
-fn connecting() -> Response {
-    (
-        StatusCode::UNAUTHORIZED,
-        Html(
-            "<!doctype html><meta charset=\"utf-8\"><meta http-equiv=\"refresh\" content=\"3\">\
-             <title>bletherneuk</title><p>Connecting to bletherneuk…</p>\
-             <p>If this stays, run <code>blether board</code> in a terminal.</p>",
-        ),
-    )
-        .into_response()
+/// Shown when a page is loaded without a fresh one-time code. The panel waits while
+/// the bridge registers it again with a new code (protocol §2.1); the board and the
+/// Changes page say how to reopen them.
+fn expired(panel: bool) -> Response {
+    let body = if panel {
+        "<!doctype html><meta charset=\"utf-8\"><meta http-equiv=\"refresh\" content=\"3\">\
+         <title>bletherneuk</title><p>Connecting to bletherneuk…</p>\
+         <p>If this stays, check <code>blether doctor</code> in a terminal.</p>"
+    } else {
+        "<!doctype html><meta charset=\"utf-8\"><title>bletherneuk</title>\
+         <p>This page has expired.</p>\
+         <p>Open the board again with <code>blether board</code>, or reopen Changes from the panel.</p>"
+    };
+    (StatusCode::UNAUTHORIZED, Html(body)).into_response()
 }
 
-fn allowed_next(next: &str) -> Option<String> {
-    if next == "/" || next == "/panel" {
-        return Some(next.to_string());
+fn page_name(next: &str) -> &'static str {
+    match next {
+        "/" => "board",
+        "/panel" => "panel",
+        _ => "changes",
     }
-    let block = next.strip_prefix("/changes?block=")?;
-    block
-        .parse::<i64>()
-        .ok()
-        .map(|b| format!("/changes?block={b}"))
-}
-
-/// A same-origin hop to `next`, so the `SameSite=Strict` cookie is sent with it.
-fn hop(next: &str) -> String {
-    format!(
-        "<!doctype html><meta charset=\"utf-8\"><meta http-equiv=\"refresh\" content=\"0;url={}\">\
-         <title>bletherneuk</title>",
-        actions::html_escape(next)
-    )
 }
 
 #[derive(Deserialize)]
@@ -209,64 +190,43 @@ struct AuthQuery {
     next: Option<String>,
 }
 
+/// Opening a page: a valid one-time code returns the page itself, with the write key
+/// inside. The page then shows the clean path in its address bar.
 async fn auth(
     State(app): State<Shared>,
     headers: HeaderMap,
     Query(q): Query<AuthQuery>,
 ) -> Response {
     if let Some(next) = q.code.as_deref().and_then(|c| app.redeem(c)) {
-        let cookie = format!(
-            "{}={}; HttpOnly; SameSite=Strict; Path=/",
-            cookie_name(&app),
-            app.secrets.session
+        tracing::info!(
+            page = page_name(&next),
+            fetch_site = fetch_site(&headers).unwrap_or("(none)"),
+            "a page opened"
         );
-        return (
-            StatusCode::OK,
-            [(header::SET_COOKIE, cookie)],
-            Html(hop(&next)),
-        )
-            .into_response();
+        return app_page(&app, &next);
     }
-    if has_session(&app, &headers) {
-        let next = q
-            .next
-            .as_deref()
-            .and_then(allowed_next)
-            .unwrap_or_else(|| "/".into());
-        return Html(hop(&next)).into_response();
-    }
-    // The toolbelt loads its URL directly (no Fetch Metadata, or "none"). Other sites
-    // may reach /auth, but mustn't be able to make the panel reload.
-    let direct = matches!(
-        headers.get("sec-fetch-site").and_then(|v| v.to_str().ok()),
-        None | Some("none")
-    );
-    if direct {
+    let panel = q.next.as_deref() == Some("/panel");
+    if panel && direct_load(&headers) {
         bridge::panel_needs_auth(&app);
     }
-    connecting()
+    expired(panel)
 }
 
-#[derive(Deserialize)]
-struct PageQuery {
-    block: Option<i64>,
-}
-
+/// `/`, `/panel` and `/changes` never carry the key themselves.
 async fn page(
     State(app): State<Shared>,
     req_path: axum::extract::OriginalUri,
-    Query(q): Query<PageQuery>,
+    headers: HeaderMap,
 ) -> Response {
-    let name = match req_path.path() {
-        "/" => "board",
-        "/panel" => "panel",
-        _ => {
-            if q.block.is_none() {
-                return deny(StatusCode::NOT_FOUND, "no block");
-            }
-            "changes"
-        }
-    };
+    let panel = req_path.path() == "/panel";
+    if panel && direct_load(&headers) {
+        bridge::panel_needs_auth(&app);
+    }
+    expired(panel)
+}
+
+/// The app's HTML with the page kind, its clean path and the write key added.
+fn app_page(app: &Shared, next: &str) -> Response {
     let Some(index) = Assets::get("index.html") else {
         return Html(
             "<!doctype html><meta charset=\"utf-8\"><title>bletherneuk</title>\
@@ -276,7 +236,10 @@ async fn page(
     };
     let html = String::from_utf8_lossy(&index.data);
     let meta = format!(
-        "<meta name=\"bn-page\" content=\"{name}\"><meta name=\"bn-key\" content=\"{}\">",
+        "<meta name=\"bn-page\" content=\"{}\"><meta name=\"bn-next\" content=\"{}\">\
+         <meta name=\"bn-key\" content=\"{}\">",
+        page_name(next),
+        actions::html_escape(next),
         app.secrets.write_key
     );
     let html = html.replacen("<head>", &format!("<head>{meta}"), 1);

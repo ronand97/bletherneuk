@@ -1,10 +1,15 @@
 // Live updates over server-sent events (docs/protocol.md section 2.4, GET /api/events).
-// On error the stream is closed and reopened with exponential backoff, and pages show a
-// "reconnecting" overlay. When it reopens, pages refetch, since events may have been missed.
+// The stream is read with fetch() so it can carry the write key header. On error it is
+// reopened with exponential backoff, and pages show a "reconnecting" overlay. When it
+// reopens, pages refetch, since events may have been missed. If the service no longer
+// knows the key (it restarted), the page has expired: the toolbelt panel reloads, which
+// makes the bridge register it again; other pages say how to reopen them.
 
+import { authHeaders } from './api';
+import { SseParser, type SseMessage } from './sse';
 import type { BridgeEvent, ChangedEvent, Focus, ThemeResponse } from './types';
 
-export type ConnectionState = 'connecting' | 'open' | 'reconnecting';
+export type ConnectionState = 'connecting' | 'open' | 'reconnecting' | 'expired';
 
 interface EventMap {
   changed: ChangedEvent;
@@ -32,8 +37,10 @@ class Connection {
   bridge = $state<boolean | null>(null);
   /** When the next reconnect attempt is due (ms since epoch), while reconnecting. */
   retryAt = $state(0);
+  /** The toolbelt panel reloads itself when it expires; other pages show a message. */
+  reloadWhenExpired = false;
 
-  #source: EventSource | null = null;
+  #abort: AbortController | null = null;
   #attempt = 0;
   #everOpened = false;
   #timer: ReturnType<typeof setTimeout> | null = null;
@@ -61,38 +68,78 @@ class Connection {
   }
 
   start(): void {
-    if (this.#source || typeof EventSource === 'undefined') return;
-    const source = new EventSource('/api/events');
-    this.#source = source;
-    source.addEventListener('open', () => {
-      const reopened = this.#everOpened;
-      this.#everOpened = true;
-      this.#attempt = 0;
-      this.state = 'open';
-      if (reopened) this.#emit('reopen', null);
-    });
-    source.addEventListener('error', () => this.#onError());
-    this.#listen(source, 'changed', (d) => this.#emit('changed', d as ChangedEvent));
-    this.#listen(source, 'theme', (d) => this.#emit('theme', d as ThemeResponse));
-    this.#listen(source, 'focus', (d) => this.#emit('focus', d as Focus));
-    this.#listen(source, 'bridge', (d) => {
-      const connected = (d as BridgeEvent).connected === true;
-      this.bridge = connected;
-      this.#emit('bridge', { connected });
-    });
+    if (this.#abort || this.state === 'expired') return;
+    const ctrl = new AbortController();
+    this.#abort = ctrl;
+    void this.#run(ctrl);
   }
 
-  #listen(source: EventSource, name: string, fn: (data: unknown) => void): void {
-    source.addEventListener(name, (ev) => {
-      let data: unknown;
-      try {
-        data = JSON.parse((ev as MessageEvent<string>).data);
-      } catch {
-        return;
+  async #run(ctrl: AbortController): Promise<void> {
+    let res: Response;
+    try {
+      res = await fetch('/api/events', {
+        headers: authHeaders({ Accept: 'text/event-stream' }),
+        credentials: 'omit',
+        cache: 'no-store',
+        signal: ctrl.signal,
+      });
+    } catch {
+      this.#drop(ctrl);
+      return;
+    }
+    if (res.status === 401 || res.status === 403) {
+      this.#abort = null;
+      this.#expired();
+      return;
+    }
+    if (!res.ok || !res.body) {
+      this.#drop(ctrl);
+      return;
+    }
+    const reopened = this.#everOpened;
+    this.#everOpened = true;
+    this.#attempt = 0;
+    this.state = 'open';
+    if (reopened) this.#emit('reopen', null);
+    const parser = new SseParser();
+    const reader = res.body.pipeThrough(new TextDecoderStream()).getReader();
+    try {
+      for (;;) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        for (const message of parser.push(value)) this.#dispatch(message);
       }
-      if (data === null || typeof data !== 'object') return;
-      fn(data);
-    });
+    } catch {
+      // The stream broke; reconnect below.
+    }
+    this.#drop(ctrl);
+  }
+
+  #dispatch(message: SseMessage): void {
+    let data: unknown;
+    try {
+      data = JSON.parse(message.data);
+    } catch {
+      return;
+    }
+    if (data === null || typeof data !== 'object') return;
+    switch (message.event) {
+      case 'changed':
+        this.#emit('changed', data as ChangedEvent);
+        break;
+      case 'theme':
+        this.#emit('theme', data as ThemeResponse);
+        break;
+      case 'focus':
+        this.#emit('focus', data as Focus);
+        break;
+      case 'bridge': {
+        const connected = (data as BridgeEvent).connected === true;
+        this.bridge = connected;
+        this.#emit('bridge', { connected });
+        break;
+      }
+    }
   }
 
   #emit<K extends keyof EventMap>(event: K, data: EventMap[K]): void {
@@ -105,9 +152,9 @@ class Connection {
     }
   }
 
-  #onError(): void {
-    this.#source?.close();
-    this.#source = null;
+  #drop(ctrl: AbortController): void {
+    if (this.#abort !== ctrl) return;
+    this.#abort = null;
     this.state = 'reconnecting';
     if (this.#timer) return;
     const delay = backoffDelay(this.#attempt) * (0.85 + Math.random() * 0.3);
@@ -115,27 +162,16 @@ class Connection {
     this.retryAt = Date.now() + delay;
     this.#timer = setTimeout(() => {
       this.#timer = null;
-      void this.#retry();
+      this.start();
     }, delay);
   }
 
-  async #retry(): Promise<void> {
-    // After a service restart the session cookie and write key are no longer valid.
-    // Reloading leads to the service's "connecting" page, which signs the page in again.
-    if (await sessionExpired()) {
+  #expired(): void {
+    if (this.reloadWhenExpired) {
       reloadOnce();
       return;
     }
-    this.start();
-  }
-}
-
-async function sessionExpired(): Promise<boolean> {
-  try {
-    const res = await fetch('/api/theme', { cache: 'no-store', credentials: 'same-origin' });
-    return res.status === 401 || res.status === 403;
-  } catch {
-    return false;
+    this.state = 'expired';
   }
 }
 
@@ -148,7 +184,7 @@ function reloadOnce(): void {
     last = 0;
   }
   if (Date.now() - last < 15_000) {
-    connection.start();
+    connection.state = 'expired';
     return;
   }
   try {
