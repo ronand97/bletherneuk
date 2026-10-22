@@ -473,3 +473,43 @@ fn a_chat_whose_worktree_was_removed_resumes_in_the_main_checkout() {
         "worktree removed; resumes in the main checkout"
     );
 }
+
+#[test]
+fn a_tab_opened_by_hand_in_a_block_window_is_not_pinned_to_the_block() {
+    let t = test_app();
+    let root = t.work_dir().join("shop");
+    testrepo::init(&root);
+    let block = {
+        let db = t.app.db.lock().unwrap();
+        let key = crate::group::Key::Branch {
+            repo_root: root.to_string_lossy().into_owned(),
+            branch: "feat/x".into(),
+        };
+        crate::group::block_for_key(db.conn(), &key, None, 0).unwrap()
+    };
+    // After a reconnect, the bridge reports every session with its window's block.
+    let hello = json!({"type": "bridge_hello", "sessions": [
+        {"session": SESSION, "window": "w1", "tab": "t1", "block": block, "chat": null}
+    ]});
+    bridge::apply_hello(&t.app, &hello);
+    hooks::on_hook(
+        &t.app,
+        ev("SessionStart", &root),
+        Some(SESSION.into()),
+        1_000,
+    );
+    let (b, reason): (Option<i64>, Option<String>) = t
+        .app
+        .db
+        .lock()
+        .unwrap()
+        .conn()
+        .query_row(
+            "SELECT block_id, group_reason FROM chats WHERE id = ?1",
+            [CHAT],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .unwrap();
+    assert_eq!(b, None);
+    assert_ne!(reason.as_deref(), Some("started from this block"));
+}

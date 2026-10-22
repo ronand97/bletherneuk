@@ -195,7 +195,7 @@ fn session_uuid(v: Option<&Value>) -> Option<String> {
     crate::ingest::is_uuid(s).then(|| s.to_ascii_uppercase())
 }
 
-fn apply_hello(app: &Shared, hello: &Value) {
+pub(crate) fn apply_hello(app: &Shared, hello: &Value) {
     if let Some(c) = hello.get("colors") {
         set_colors(app, c);
     }
@@ -207,12 +207,15 @@ fn apply_hello(app: &Shared, hello: &Value) {
             let Some(id) = session_uuid(s.get("session")) else {
                 continue;
             };
+            // The block reported here is the window's: a hint for focus, never a reason
+            // to file a chat under it.
             sessions.insert(
                 id.clone(),
                 Session {
                     window: opaque_id(s.get("window")),
                     tab: opaque_id(s.get("tab")),
-                    block: s.get("block").and_then(Value::as_i64),
+                    block: None,
+                    window_block: s.get("block").and_then(Value::as_i64),
                 },
             );
             if let Some(chat) = s.get("chat").and_then(Value::as_str)
@@ -265,6 +268,7 @@ pub fn on_event(app: &Shared, msg: &Value) {
                         window: opaque_id(msg.get("window")),
                         tab: opaque_id(msg.get("tab")),
                         block: msg.get("block").and_then(Value::as_i64),
+                        window_block: msg.get("block").and_then(Value::as_i64),
                     },
                 );
                 app.changed([]);
@@ -345,7 +349,7 @@ pub fn set_focus(app: &Shared, session: Option<String>, window: Option<String>) 
         let chat = row.as_ref().map(|r| r.0.clone());
         let block = row
             .and_then(|r| r.1)
-            .or_else(|| tagged.as_ref().and_then(|t| t.block));
+            .or_else(|| tagged.as_ref().and_then(|t| t.block.or(t.window_block)));
         (chat, block, became_idle)
     };
     let focus = Focus {

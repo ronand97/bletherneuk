@@ -71,10 +71,29 @@ def test_open_chat_opens_a_window_for_the_block(folder):
             ("activate_session", session.session_id),
             ("activate_app",),
         ]
+        # A resumed chat already has its block; only new chats are tagged (design section 9).
         assert sent(bridge, "session_opened") == [{
             "type": "session_opened", "session": session.session_id, "window": window.window_id,
-            "tab": window.tabs[0].tab_id, "block": 3,
+            "tab": window.tabs[0].tab_id, "block": None,
         }]
+
+    run(scenario)
+
+
+def test_an_unsorted_chat_opens_in_the_current_window(folder):
+    async def scenario():
+        bridge = new_bridge()
+        app = bridge.connection.app
+        current = app.add_window(sessions=1)
+        await prime(bridge)
+        reply = await request(bridge, "open_chat", chat=CHAT, session=None, folder=folder, block=None,
+                              window_title="Unsorted", tab_title="Loose chat")
+        assert reply["ok"] is True
+        assert len(app.windows) == 1
+        session = current.tabs[-1].sessions[0]
+        assert ("send_text", session.session_id, "claude --resume %s\n" % CHAT) in app.calls
+        assert not any(c[0] == "set_window_variable" for c in app.calls)
+        assert not any(c[0] == "set_window_title" for c in app.calls)
 
     run(scenario)
 

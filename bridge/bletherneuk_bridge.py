@@ -489,13 +489,19 @@ class Bridge:
         await session.async_activate(select_tab=True, order_window_front=True)
         await app.async_activate(raise_all_windows=False)
 
-    async def new_tab(self, app, block, profile, window_title=None, tab_title=None):
-        """Opens a tab in the block's window, creating the window if needed."""
-        window = self.block_window(app, block)
+    async def new_tab(self, app, block, profile, window_title=None, tab_title=None, tag=False):
+        """Opens a tab in the block's window, creating the window if needed.
+
+        A chat with no block (Unsorted) opens in the current window. Only `tag`ged tabs
+        (new chats started from a block) report the block in session_opened, so the
+        service files their chat under it (design section 9).
+        """
+        window = self.block_window(app, block) if block is not None else app.current_window
         if window is None:
             window = await iterm2.Window.async_create(self.connection, profile_customizations=profile)
             need(window is not None, "iterm2_error")
-            await window.async_set_variable(BLOCK_VAR, block)
+            if block is not None:
+                await window.async_set_variable(BLOCK_VAR, block)
             self.windows[window.window_id] = block
             tab = window.tabs[0]
         else:
@@ -504,8 +510,9 @@ class Bridge:
         session = tab.sessions[0]
         where = {"window": window.window_id, "tab": tab.tab_id}
         self.sessions[session.session_id] = dict(where, chat=None)
-        await self.send(dict(where, type="session_opened", session=session.session_id, block=block))
-        if window_title is not None:
+        await self.send(dict(where, type="session_opened", session=session.session_id,
+                             block=block if tag else None))
+        if window_title is not None and block is not None:
             await window.async_set_title(window_title)
         if tab_title is not None:
             await tab.async_set_title(tab_title)
@@ -535,7 +542,7 @@ class Bridge:
         chat, sid, folder, block = (message.get(k) for k in ("chat", "session", "folder", "block"))
         need(is_uuid(chat), "invalid_chat")
         need(sid is None or is_uuid(sid), "invalid_session")
-        need(is_block(block), "invalid_block")
+        need(block is None or is_block(block), "invalid_block")
         window_title = optional_title(message.get("window_title"))
         tab_title = optional_title(message.get("tab_title"))
         app = await self.app()
@@ -555,7 +562,7 @@ class Bridge:
         window_title = optional_title(message.get("window_title"))
         app = await self.app()
         async with self.lock:
-            session = await self.new_tab(app, block, terminal_profile(folder), window_title)
+            session = await self.new_tab(app, block, terminal_profile(folder), window_title, tag=True)
             await session.async_send_text("claude --worktree %s\n" % name if name else "claude\n")
             await self.show(app, session)
             return session.session_id
