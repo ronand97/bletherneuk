@@ -24,8 +24,10 @@ The client sends one line and reads one reply line, then closes. Replies are `{"
 | `{"type": "page_url", "page": "board" \| "panel" \| "changes", "block": id or null}` | `{"ok": true, "url": "http://127.0.0.1:<port>/auth?code=<code>&next=<path>"}` |
 | `{"type": "open_page", "page": "board" \| "changes", "block": id or null, "near_session": "<UUID>" or null}` | `{"ok": true, "via": "iterm2" \| "browser"}` |
 | `{"type": "link", "url": "...", "title": "..." or null, "block": id or null, "iterm_session": "<UUID>" or null, "by_claude": bool}` | `{"ok": true, "block": id, "link": id}` |
+| `{"type": "add_file", "path": "/abs/path", "block": id or null, "iterm_session": "<UUID>" or null}` | `{"ok": true}` (from `blether file`) |
 | `{"type": "rescan"}` | `{"ok": true}` |
 | `{"type": "doctor"}` | `{"ok": true, "report": {...}}` |
+| `{"type": "live_check"}` | `{"ok": true}` once a browser pane was opened and closed in iTerm2 (`blether doctor --live`) |
 
 `Event` is the hook event reduced to the fields bletherneuk uses: `name`, `session_id`, and optionally `transcript_path`, `cwd`, `prompt` (at most 2,000 characters), `notification_type`, `tool_name`, `file_path`, `agent_id`, `background_tasks` (a count), `source`, `reason`.
 
@@ -65,14 +67,15 @@ The bridge keeps one connection open. Either side may send at any time.
 | `{"type": "request", "id": n, "op": "open_chat", "chat": "<UUID>", "session": "<UUID>" or null, "folder": "/abs/path", "block": id, "window_title": "...", "tab_title": "..."}` | If `session` is open, focuses it. Otherwise creates a tab in the block's window (creating the window if needed), with the default profile plus `"Custom Directory": "Yes"` and `"Working Directory": folder`, then types `claude --resume <UUID>` and a newline. Sets `user.bletherneuk_chat` on the session. Replies with the session ID. |
 | `{"type": "request", "id": n, "op": "new_chat", "block": id, "folder": "/abs/path", "worktree_name": "name" or null, "window_title": "..."}` | Creates a tab in the block's window as above. Types `claude`, or `claude --worktree <name>` when `worktree_name` is set. Tags the session with the block. Replies with the session ID. |
 | `{"type": "request", "id": n, "op": "open_block", "block": id, "window_title": "...", "chats": [{"chat": "<UUID>", "folder": "/abs/path", "tab_title": "..."}]}` | Focuses the block's window. If it isn't open, opens one with a tab per chat, each resumed as in `open_chat`. |
-| `{"type": "request", "id": n, "op": "open_page", "url": "...", "kind": "changes" \| "board", "near_session": "<UUID>" or null}` | `changes`: splits `near_session` vertically with a browser session (`"Custom Command": "Browser"`, `"Initial URL": url`), or reuses the split it opened before. `board`: opens or reuses its own window. |
+| `{"type": "request", "id": n, "op": "open_page", "url": "...", "kind": "changes" \| "board" \| "probe", "near_session": "<UUID>" or null}` | `changes`: splits `near_session` vertically with a browser session (`"Custom Command": "Browser"`, `"Initial URL": url`), or reuses the split it opened before. `board`: opens or reuses its own window. `probe`: always opens a new split (or a new tab when there's nothing to split) and replies with its session ID. |
+| `{"type": "request", "id": n, "op": "close_session", "session": "<UUID>"}` | Closes a session, but only one this bridge opened as a `probe`. |
 | `{"type": "request", "id": n, "op": "set_titles", "windows": [{"block": id, "title": "..."}], "sessions": [{"session": "<UUID>", "title": "..."}]}` | Names windows and tabs. Escapes backslashes first. |
 | `{"type": "request", "id": n, "op": "ping"}` | Replies. |
 
 The bridge refuses, without touching iTerm2:
 - a `chat` that isn't a UUID (checked with `re.fullmatch`);
 - a `folder` that isn't absolute, doesn't exist, isn't a directory, isn't owned by the user, or contains control or bidirectional-text characters;
-- a `worktree_name` that doesn't match `^[A-Za-z0-9._-]{1,64}$`;
+- a `worktree_name` that doesn't match `^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$` (the first character can't be `-` or `.`, so a name is never read as a command-line flag);
 - a `url` that isn't `http://127.0.0.1:<port>/...`.
 
 ## 2. HTTP
@@ -83,7 +86,7 @@ The service listens on `127.0.0.1` at a random port.
 
 1. The bridge or command line asks for a page URL over the socket (`page_url` or `open_page`).
 2. The URL is `/auth?code=<code>&next=<path>`. A code works once, for 30 seconds.
-3. `/auth` sets the session cookie (`HttpOnly; SameSite=Strict; Path=/`) and answers `303` to `next`, which is never shown with the code.
+3. `/auth` sets the session cookie (`HttpOnly; SameSite=Strict; Path=/`) and answers with a tiny page that moves on to `next` with a `<meta http-equiv="refresh">`. A plain redirect would lose the cookie when the default browser arrives from the local redirect file, because browsers treat that first request as cross-site. The page never contains the code. `next` is bound to the code when it's issued; the `next` in the URL is used only in step 4.
 4. A request to `/auth` that already carries a valid session cookie is redirected to `next` whatever its code. Every toolbelt panel shares one cookie store, so panels in later windows get in this way.
 5. If a page or `/auth` is requested without a valid cookie, the service shows a "connecting" page. That page reloads itself every few seconds. At most once every 10 seconds, the service also sends the bridge a fresh `panel` URL.
 
@@ -202,7 +205,7 @@ Every action returns `{"ok": true}` or `{"ok": false, "error": "<text>"}`. Actio
 | `POST /api/chats/<id>/move` | `{"block": id or null}` | Moves the chat by hand. `null` is Unsorted. |
 | `POST /api/chats/<id>/keep-awake` | `{"on": bool}` | Starts or cancels "keep awake until done". |
 | `POST /api/blocks/<id>/open` | `{}` | Focuses or opens the block's window. |
-| `POST /api/blocks/<id>/new-chat` | `{"where": "worktree" \| "main" \| "new_worktree", "worktree": id or null, "name": "..." or null}` | Starts a chat. `worktree` picks one for `"worktree"`. `name` is needed for `"new_worktree"`. |
+| `POST /api/blocks/<id>/new-chat` | `{"where": "worktree" \| "main" \| "new_worktree", "worktree": id or null, "name": "..." or null}` | Starts a chat. `worktree` picks one for `"worktree"`. `name` is needed for `"new_worktree"` and must match `^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$`. |
 | `POST /api/blocks/<id>/rename` | `{"title": "..." or null}` | Renames. `null` or empty goes back to the automatic title. |
 | `POST /api/blocks/<id>/keep-awake` | `{"on": bool}` | Covers the chats working right now. |
 | `POST /api/blocks/<id>/links` | `{"url": "...", "title": "..." or null}` | Adds a link. Only `http` and `https`. |

@@ -91,6 +91,13 @@ impl<L: Launcher> Manager<L> {
             .collect()
     }
 
+    /// Stops caffeinate without ending any request, so a restart picks them up again.
+    pub fn shutdown(&mut self) {
+        if self.launcher.running() {
+            self.launcher.stop();
+        }
+    }
+
     pub fn is_holding(&mut self) -> bool {
         self.launcher.running()
     }

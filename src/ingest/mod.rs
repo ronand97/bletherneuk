@@ -124,6 +124,31 @@ impl Batch {
     }
 }
 
+/// The result of reading one transcript, before it is recorded.
+#[derive(Debug)]
+pub struct Read {
+    pub chat_id: String,
+    key: String,
+    subagent: bool,
+    batch: Batch,
+    summary: reader::Summary,
+}
+
+/// Where the last read of a transcript stopped.
+pub fn saved_position(conn: &Connection, path: &Path) -> rusqlite::Result<Option<Position>> {
+    conn.query_row(
+        "SELECT inode, byte_offset FROM ingest_offsets WHERE path = ?1",
+        [path.to_string_lossy()],
+        |r| {
+            Ok(Position {
+                inode: r.get::<_, i64>(0)? as u64,
+                offset: r.get::<_, i64>(1)? as u64,
+            })
+        },
+    )
+    .optional()
+}
+
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub struct Counts {
     pub lines: u64,
@@ -148,37 +173,56 @@ impl<'a> Ingestor<'a> {
 
     /// Reads whatever is new in one transcript. Returns the chat it belongs to, or
     /// `None` for files that aren't transcripts.
+    /// Reads whatever is new in one transcript, then records it. Returns the chat it
+    /// belongs to, or `None` for files that aren't transcripts.
     pub fn ingest_file(
         &self,
         conn: &mut Connection,
         path: &Path,
         now_ms: i64,
     ) -> anyhow::Result<Option<(String, Counts)>> {
+        let prev = saved_position(conn, path)?;
+        let Some(read) = self.read(path, prev)? else {
+            return Ok(None);
+        };
+        Ok(Some(self.record(conn, read, now_ms)?))
+    }
+
+    /// Reads a transcript from `prev` without touching the database, so the service
+    /// never holds its database lock while reading a large file.
+    pub fn read(&self, path: &Path, prev: Option<Position>) -> anyhow::Result<Option<Read>> {
         let Some(t) = classify_transcript(&self.paths.claude_projects(), path) else {
             return Ok(None);
         };
-        let key = path.to_string_lossy().into_owned();
-        let prev: Option<Position> = conn
-            .query_row(
-                "SELECT inode, byte_offset FROM ingest_offsets WHERE path = ?1",
-                [&key],
-                |r| {
-                    Ok(Position {
-                        inode: r.get::<_, i64>(0)? as u64,
-                        offset: r.get::<_, i64>(1)? as u64,
-                    })
-                },
-            )
-            .optional()?;
-
         let subagent = matches!(t, Transcript::Subagent { .. });
         let mut batch = Batch::default();
         let home = self.paths.home.clone();
         let summary = reader::read_new(path, prev, |line| {
             batch.add(line, &self.finder, &home, subagent)
         })?;
+        Ok(Some(Read {
+            chat_id: t.session_id().to_string(),
+            key: path.to_string_lossy().into_owned(),
+            subagent,
+            batch,
+            summary,
+        }))
+    }
 
-        let chat_id = t.session_id().to_string();
+    /// Records what [`Ingestor::read`] found, in one transaction.
+    pub fn record(
+        &self,
+        conn: &mut Connection,
+        read: Read,
+        now_ms: i64,
+    ) -> anyhow::Result<(String, Counts)> {
+        let Read {
+            chat_id,
+            key,
+            subagent,
+            batch,
+            summary,
+        } = read;
         let tx = conn.transaction()?;
         if summary.restarted && !subagent {
             reset_chat(&tx, &chat_id)?;
@@ -204,14 +248,14 @@ impl<'a> Ingestor<'a> {
         bump_counter(&tx, "ingest.malformed", summary.malformed)?;
         bump_counter(&tx, "ingest.oversized", summary.oversized)?;
         tx.commit()?;
-        Ok(Some((
+        Ok((
             chat_id,
             Counts {
                 lines: summary.lines,
                 malformed: summary.malformed,
                 oversized: summary.oversized,
             },
-        )))
+        ))
     }
 
     fn apply(
