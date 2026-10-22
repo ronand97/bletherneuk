@@ -145,13 +145,18 @@ pub fn ingest_one(app: &super::App, path: &Path) -> BTreeSet<i64> {
         }
     };
     let mut db = app.db.lock().expect("db lock");
-    let Ok((chat, _)) = ing.record(db.conn_mut(), read, now) else {
+    let Ok((chat, counts)) = ing.record(db.conn_mut(), read, now) else {
         return BTreeSet::new();
     };
     let mut locator = app.locator.lock().expect("locator lock");
     let _ = group::refresh_location(db.conn(), &mut locator, &chat);
     drop(locator);
-    group::place_chat(db.conn(), &config, &chat, now).unwrap_or_default()
+    let touched = group::place_chat(db.conn(), &config, &chat, now).unwrap_or_default();
+    drop(db);
+    if let Some(at) = counts.interrupted_at {
+        super::hooks::on_interrupt(app, &chat, at);
+    }
+    touched
 }
 
 async fn watch_loop(app: Shared, worktrees_now: Arc<Notify>) {

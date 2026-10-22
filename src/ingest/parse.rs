@@ -21,6 +21,8 @@ pub struct Line {
     pub ai_title: Option<String>,
     /// A prompt you typed (not a tool result, command echo or injected context).
     pub prompt: Option<String>,
+    /// You pressed Esc: Claude Code logs "[Request interrupted by user…]" and sends no Stop.
+    pub interrupted: bool,
     /// `(tool, file_path)` for each Write/Edit/MultiEdit/NotebookEdit call.
     pub writes: Vec<(String, String)>,
     pub commands: Vec<String>,
@@ -112,6 +114,10 @@ fn read_user(v: &Value, line: &mut Line) {
     }
     let text = texts.join("\n");
     let trimmed = text.trim();
+    if trimmed.starts_with("[Request interrupted by user") {
+        line.interrupted = true;
+        return;
+    }
     if !trimmed.is_empty() && !is_command_echo(trimmed) {
         line.prompt = Some(trimmed.to_string());
     }
@@ -267,6 +273,21 @@ mod tests {
         ] {
             assert_eq!(line(json).prompt, None, "{json}");
         }
+    }
+
+    #[test]
+    fn interrupts_are_noticed_and_are_not_prompts() {
+        for text in [
+            r#""[Request interrupted by user]""#,
+            r#"[{"type":"text","text":"[Request interrupted by user for tool use]"}]"#,
+        ] {
+            let l = line(&format!(
+                r#"{{"type":"user","message":{{"content":{text}}}}}"#
+            ));
+            assert!(l.interrupted, "{text}");
+            assert_eq!(l.prompt, None);
+        }
+        assert!(!line(r#"{"type":"user","message":{"content":"carry on"}}"#).interrupted);
     }
 
     #[test]

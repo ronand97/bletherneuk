@@ -513,3 +513,61 @@ fn a_tab_opened_by_hand_in_a_block_window_is_not_pinned_to_the_block() {
     assert_eq!(b, None);
     assert_ne!(reason.as_deref(), Some("started from this block"));
 }
+
+fn iso(ms: i64) -> String {
+    chrono::DateTime::from_timestamp_millis(ms)
+        .unwrap()
+        .to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
+}
+
+fn write_interrupt(t: &testing::TestApp, root: &Path, at: i64) -> std::path::PathBuf {
+    let dir = t.app.paths.claude_projects().join("-w-shop");
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join(format!("{CHAT}.jsonl"));
+    let line = json!({
+        "type": "user", "sessionId": CHAT, "cwd": root, "timestamp": iso(at),
+        "message": {"role": "user", "content": [{"type": "text", "text": "[Request interrupted by user]"}]}
+    });
+    std::fs::write(&path, format!("{line}\n")).unwrap();
+    path
+}
+
+#[test]
+fn an_interrupted_chat_stops_working_and_its_turn_ends() {
+    let mut t = test_app();
+    let root = t.work_dir().join("shop");
+    testrepo::init(&root);
+    let start = 1_767_225_600_000;
+    hooks::on_hook(&t.app, ev("UserPromptSubmit", &root), None, start);
+    t.drain_snapshots();
+    let path = write_interrupt(&t, &root, start + 5_000);
+    tasks::ingest_one(&t.app, &path);
+    assert_eq!(status_of(&t.app, CHAT), "done");
+    t.drain_snapshots();
+    let (ended, end): (Option<i64>, Option<i64>) = t
+        .app
+        .db
+        .lock()
+        .unwrap()
+        .conn()
+        .query_row(
+            "SELECT ended_at, end_snapshot FROM turns WHERE chat_id = ?1",
+            [CHAT],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .unwrap();
+    assert_eq!(ended, Some(start + 5_000));
+    assert!(end.is_some());
+}
+
+#[test]
+fn an_old_interrupt_doesnt_stop_a_newer_turn() {
+    let t = test_app();
+    let root = t.work_dir().join("shop");
+    testrepo::init(&root);
+    let start = 1_767_225_600_000;
+    hooks::on_hook(&t.app, ev("UserPromptSubmit", &root), None, start + 10_000);
+    let path = write_interrupt(&t, &root, start + 5_000);
+    tasks::ingest_one(&t.app, &path);
+    assert_eq!(status_of(&t.app, CHAT), "working");
+}

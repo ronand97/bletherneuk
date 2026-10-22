@@ -209,3 +209,63 @@ pub fn on_hook(app: &Shared, ev: Event, iterm_session: Option<String>, time: i64
     super::tasks::tick_keep_awake(app, time);
     app.changed(touched);
 }
+
+/// You interrupted a chat with Esc. Claude Code sends no `Stop` then, so the transcript's
+/// "[Request interrupted by user]" line ends the turn, unless a hook event has arrived
+/// since (a new prompt, say).
+pub fn on_interrupt(app: &super::App, chat: &str, at: i64) {
+    let mut job = None;
+    {
+        let db = app.db.lock().expect("db lock");
+        let c = db.conn();
+        let quiet: bool = c
+            .query_row(
+                "SELECT COALESCE(last_event_at, 0) <= ?2 FROM chats WHERE id = ?1",
+                params![chat, at],
+                |r| r.get(0),
+            )
+            .unwrap_or(false);
+        if !quiet {
+            return;
+        }
+        let _ = c.execute(
+            "UPDATE chats SET status = 'done', background = 0, status_since = ?2
+             WHERE id = ?1 AND status = 'working'",
+            params![chat, at],
+        );
+        let open: Option<(i64, Option<String>)> = c
+            .query_row(
+                "SELECT id, worktree_path FROM turns
+                 WHERE chat_id = ?1 AND ended_at IS NULL AND started_at <= ?2
+                 ORDER BY started_at DESC LIMIT 1",
+                params![chat, at],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .optional()
+            .ok()
+            .flatten();
+        if let Some((turn, wt)) = open {
+            let _ = c.execute(
+                "UPDATE turns SET ended_at = ?2 WHERE id = ?1",
+                params![turn, at],
+            );
+            let written = app
+                .turn_writes
+                .lock()
+                .expect("turn writes lock")
+                .remove(&turn)
+                .unwrap_or_default();
+            if let Some(w) = wt {
+                job = Some(Job {
+                    worktree: PathBuf::from(w),
+                    reason: "turn_end",
+                    turn: Some((turn, Edge::End)),
+                    extra: written.into_iter().collect(),
+                });
+            }
+        }
+    }
+    if let Some(j) = job {
+        let _ = app.snap_tx.send(j);
+    }
+}

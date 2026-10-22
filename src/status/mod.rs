@@ -160,9 +160,11 @@ pub fn transition(prev: Option<State>, ev: &Event) -> Option<State> {
         "PermissionRequest" => stopped(Status::NeedsYou),
         "Notification" => match ev.notification_type.as_deref() {
             Some(t) if NEEDS_YOU_NOTIFICATIONS.contains(&t) => stopped(Status::NeedsYou),
-            // Claude is idle at the prompt: whatever background work there was is over.
+            // Claude has sat at the prompt for a minute. With no background work, the
+            // turn is over; that's how an interrupted turn (Esc, which sends no Stop) ends.
+            // Background tasks may still be running, so those chats stay working.
             Some("idle_prompt")
-                if prev.is_some_and(|p| p.status == Status::Working && p.background) =>
+                if prev.is_some_and(|p| p.status == Status::Working && !p.background) =>
             {
                 stopped(Status::Done)
             }
@@ -329,8 +331,24 @@ mod tests {
             notification_type: Some("idle_prompt".into()),
             ..ev("Notification")
         };
-        assert_eq!(transition(bg, &idle), st(Status::Done, false));
+        assert_eq!(
+            transition(bg, &idle),
+            None,
+            "background tasks may still run"
+        );
         assert_eq!(transition(st(Status::Done, false), &idle), None);
+    }
+
+    #[test]
+    fn an_interrupted_turn_ends_when_claude_sits_idle() {
+        let idle = Event {
+            notification_type: Some("idle_prompt".into()),
+            ..ev("Notification")
+        };
+        assert_eq!(
+            transition(st(Status::Working, false), &idle),
+            st(Status::Done, false)
+        );
     }
 
     #[test]

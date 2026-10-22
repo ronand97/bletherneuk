@@ -72,6 +72,8 @@ struct Batch {
     branch: Option<String>,
     first_ts: Option<i64>,
     last_ts: Option<i64>,
+    /// The latest "[Request interrupted by user]" line.
+    interrupted_at: Option<i64>,
     /// (absolute path, time)
     writes: Vec<(PathBuf, Option<i64>)>,
     /// (absolute path, found_by)
@@ -105,6 +107,9 @@ impl Batch {
         }
         if let Some(t) = line.ai_title {
             self.ai_title = Some(t);
+        }
+        if line.interrupted {
+            self.interrupted_at = self.interrupted_at.max(line.timestamp.or(Some(0)));
         }
         if self.first_prompt.is_none() {
             self.first_prompt = line.prompt;
@@ -154,6 +159,8 @@ pub struct Counts {
     pub lines: u64,
     pub malformed: u64,
     pub oversized: u64,
+    /// When you last interrupted the chat with Esc, if this read found that.
+    pub interrupted_at: Option<i64>,
 }
 
 pub struct Ingestor<'a> {
@@ -254,6 +261,7 @@ impl<'a> Ingestor<'a> {
                 lines: summary.lines,
                 malformed: summary.malformed,
                 oversized: summary.oversized,
+                interrupted_at: batch.interrupted_at,
             },
         ))
     }
