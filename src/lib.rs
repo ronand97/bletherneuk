@@ -6,6 +6,7 @@ pub mod group;
 pub mod ingest;
 pub mod links;
 pub mod paths;
+pub mod snapshots;
 pub mod store;
 pub mod theme;
 pub mod util;
