@@ -79,15 +79,21 @@ fn chat_summary(r: &Row, ctx: &ChatCtx) -> rusqlite::Result<Value> {
         (Some(n), Some(b)) if n != b => Some(n.clone()),
         _ => None,
     };
-    let folder_ok = last_cwd.as_deref().is_some_and(|c| Path::new(c).is_dir());
-    let resume_note = if transcript_gone {
-        Some("transcript deleted")
+    let is_dir = |p: &Option<String>| p.as_deref().is_some_and(|p| Path::new(p).is_dir());
+    // Matches actions::resume_folder: a chat whose worktree was removed resumes in the
+    // main checkout.
+    let (can_resume, resume_note) = if transcript_gone {
+        (false, Some("transcript deleted"))
     } else if removed == Some(true) {
-        Some("worktree removed")
-    } else if !folder_ok {
-        Some("folder missing")
+        if is_dir(&repo_root) {
+            (true, Some("worktree removed; resumes in the main checkout"))
+        } else {
+            (false, Some("worktree removed"))
+        }
+    } else if is_dir(&last_cwd) {
+        (true, None)
     } else {
-        None
+        (false, Some("folder missing"))
     };
     Ok(json!({
         "id": id,
@@ -103,7 +109,7 @@ fn chat_summary(r: &Row, ctx: &ChatCtx) -> rusqlite::Result<Value> {
         "now_on": now_on,
         "group_reason": r.get::<_, Option<String>>(12)?.unwrap_or_default(),
         "keep_awake": ctx.covered.contains(&id),
-        "can_resume": resume_note.is_none(),
+        "can_resume": can_resume,
         "resume_note": resume_note,
         "hidden": r.get::<_, bool>(13)?,
         "open_in_iterm": iterm.is_some_and(|s| ctx.sessions.contains(&s)),

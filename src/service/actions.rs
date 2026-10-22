@@ -57,14 +57,12 @@ fn block_title(app: &Shared, block: i64) -> Result<String, String> {
 
 /// Focuses the chat's tab, or resumes it in the block's window.
 pub async fn open_chat(app: &Shared, chat: &str) -> Outcome {
-    let (block, cwd, title, session) = chat_row(app, chat)?;
-    let summary = chat_resume_check(app, chat)?;
+    let (block, _, title, session) = chat_row(app, chat)?;
     let live = session.filter(|s| app.sessions.lock().expect("sessions lock").contains_key(s));
-    if live.is_none()
-        && let Some(note) = summary
-    {
-        return Err(format!("can't resume: {note}"));
-    }
+    let folder = match &live {
+        Some(_) => None,
+        None => Some(resume_folder(app, chat).map_err(|why| format!("can't resume: {why}"))?),
+    };
     let window_title = match block {
         Some(b) => block_title(app, b)?,
         None => "Unsorted".into(),
@@ -72,7 +70,7 @@ pub async fn open_chat(app: &Shared, chat: &str) -> Outcome {
     let reply = bridge::request(
         app,
         json!({
-            "op": "open_chat", "chat": chat, "session": live, "folder": cwd,
+            "op": "open_chat", "chat": chat, "session": live, "folder": folder,
             "block": block, "window_title": window_title,
             "tab_title": title.unwrap_or_else(|| "Claude".into()),
         }),
@@ -89,27 +87,34 @@ pub async fn open_chat(app: &Shared, chat: &str) -> Outcome {
     ok()
 }
 
-/// Why a chat can't be resumed, if it can't.
-fn chat_resume_check(app: &Shared, chat: &str) -> Result<Option<&'static str>, String> {
+/// Where to resume a chat, or why it can't be resumed. A chat whose worktree was removed
+/// resumes in the main checkout: `claude --resume <id>` finds a session from any folder
+/// (Claude Code 2.1.223 and later) and carries on there.
+pub fn resume_folder(app: &Shared, chat: &str) -> Result<String, &'static str> {
     let db = app.db.lock().expect("db lock");
-    let (gone, cwd, removed): (bool, Option<String>, Option<bool>) = db
+    let (gone, cwd, removed, root): (bool, Option<String>, Option<bool>, Option<String>) = db
         .conn()
         .query_row(
-            "SELECT c.transcript_gone, c.last_cwd, w.removed FROM chats c
-             LEFT JOIN worktrees w ON w.path = c.worktree_path WHERE c.id = ?1",
+            "SELECT c.transcript_gone, c.last_cwd, w.removed, COALESCE(w.repo_root, c.repo_root)
+             FROM chats c LEFT JOIN worktrees w ON w.path = c.worktree_path WHERE c.id = ?1",
             [chat],
-            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
         )
-        .map_err(|e| e.to_string())?;
-    Ok(if gone {
-        Some("transcript deleted")
+        .map_err(|_| "no such chat")?;
+    let is_dir = |p: &Option<String>| p.as_deref().is_some_and(|p| Path::new(p).is_dir());
+    if gone {
+        Err("transcript deleted")
     } else if removed == Some(true) {
-        Some("worktree removed")
-    } else if !cwd.as_deref().is_some_and(|c| Path::new(c).is_dir()) {
-        Some("folder missing")
+        if is_dir(&root) {
+            Ok(root.expect("checked"))
+        } else {
+            Err("worktree removed")
+        }
+    } else if is_dir(&cwd) {
+        Ok(cwd.expect("checked"))
     } else {
-        None
-    })
+        Err("folder missing")
+    }
 }
 
 pub fn move_chat(app: &Shared, chat: &str, block: Option<i64>) -> Outcome {
@@ -265,21 +270,24 @@ fn chats_for_window(app: &Shared, block: i64) -> Vec<Value> {
     {
         ids.push(id);
     }
-    ids.into_iter()
+    let titled: Vec<(String, String)> = ids
+        .into_iter()
         .filter_map(|id| {
             c.query_row(
-                "SELECT c.last_cwd, COALESCE(c.title, 'Claude') FROM chats c
-                 LEFT JOIN worktrees w ON w.path = c.worktree_path
-                 WHERE c.id = ?1 AND c.block_id = ?2 AND c.transcript_gone = 0
-                   AND COALESCE(w.removed, 0) = 0",
+                "SELECT COALESCE(title, 'Claude') FROM chats WHERE id = ?1 AND block_id = ?2",
                 params![id, block],
-                |r| Ok((r.get::<_, Option<String>>(0)?, r.get::<_, String>(1)?)),
+                |r| r.get::<_, String>(0),
             )
             .ok()
-            .and_then(|(cwd, title)| {
-                let cwd = cwd.filter(|c| Path::new(c).is_dir())?;
-                Some(json!({"chat": id, "folder": cwd, "tab_title": title}))
-            })
+            .map(|t| (id, t))
+        })
+        .collect();
+    drop(db);
+    titled
+        .into_iter()
+        .filter_map(|(id, title)| {
+            let folder = resume_folder(app, &id).ok()?;
+            Some(json!({"chat": id, "folder": folder, "tab_title": title}))
         })
         .collect()
 }

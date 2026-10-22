@@ -450,3 +450,26 @@ fn page_paths_are_limited() {
     assert_eq!(App::page_path("changes", None), None);
     assert_eq!(App::page_path("../etc", None), None);
 }
+
+#[test]
+fn a_chat_whose_worktree_was_removed_resumes_in_the_main_checkout() {
+    let t = test_app();
+    let (block, wt) = seed_block(&t);
+    let root = t.work_dir().join("shop");
+    assert_eq!(
+        actions::resume_folder(&t.app, CHAT).unwrap(),
+        wt.to_string_lossy()
+    );
+    std::fs::remove_dir_all(&wt).unwrap();
+    tasks::refresh_worktrees(&t.app, None);
+    assert_eq!(
+        actions::resume_folder(&t.app, CHAT).unwrap(),
+        root.to_string_lossy()
+    );
+    let chat = &views::block(&t.app, block).unwrap()["chats"][0];
+    assert_eq!(chat["can_resume"], true);
+    assert_eq!(
+        chat["resume_note"],
+        "worktree removed; resumes in the main checkout"
+    );
+}
